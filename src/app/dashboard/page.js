@@ -1,6 +1,7 @@
 'use client';
 
 import { useState, useEffect } from 'react';
+import { useRouter } from 'next/navigation';
 import styles from './dashboard.module.css';
 import MetricCard from '@/components/MetricCard';
 import {
@@ -27,15 +28,24 @@ const CustomTooltip = ({ active, payload, label }) => {
 };
 
 export default function DashboardPage() {
+  const router = useRouter();
   const [data, setData] = useState(null);
   const [loading, setLoading] = useState(true);
+  const [businessName, setBusinessName] = useState('');
 
   useEffect(() => {
-    // For demo purposes, we retrieve the active business from local storage
     const activeBusinessId = localStorage.getItem('active_business_id');
-    const url = activeBusinessId ? `/api/analytics?businessId=${activeBusinessId}` : '/api/analytics';
+    const name = localStorage.getItem('business_name');
 
-    fetch(url)
+    // Auth guard — must be logged in
+    if (!activeBusinessId) {
+      router.push('/login');
+      return;
+    }
+
+    setBusinessName(name || 'Your Business');
+
+    fetch(`/api/analytics?businessId=${activeBusinessId}`)
       .then(res => res.json())
       .then(d => { setData(d); setLoading(false); })
       .catch(() => setLoading(false));
@@ -54,19 +64,76 @@ export default function DashboardPage() {
 
   const COLORS = ['#6366f1', '#8b5cf6', '#06b6d4', '#22c55e', '#f59e0b'];
 
+
   return (
     <div className={styles.page}>
       <div className={styles.container}>
         {/* Header */}
         <div className={styles.header}>
           <div>
-            <h1 className={styles.title}>Business Dashboard</h1>
+            <h1 className={styles.title}>{businessName} Dashboard</h1>
             <p className={styles.subtitle}>Real-time analytics & revenue intelligence</p>
           </div>
-          <div className={styles.headerBadge}>
-            <span className={styles.liveDot} />
-            Live Data
+          <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+            <div className={styles.headerBadge}>
+              <span className={styles.liveDot} />
+              Live Data
+            </div>
+            <button
+              onClick={() => { localStorage.clear(); router.push('/login'); }}
+              style={{
+                background: 'transparent', border: '1px solid rgba(255,255,255,0.1)',
+                color: 'var(--text-secondary)', padding: '8px 16px', borderRadius: '8px',
+                cursor: 'pointer', fontSize: '0.85rem', transition: 'all 0.2s'
+              }}
+              onMouseOver={e => e.target.style.color = '#ef4444'}
+              onMouseOut={e => e.target.style.color = 'var(--text-secondary)'}
+            >
+              Sign Out
+            </button>
           </div>
+        </div>
+
+        {/* Chat Link Banner */}
+        <div style={{
+          display: 'flex', alignItems: 'center', gap: '12px',
+          background: 'rgba(99,102,241,0.08)', border: '1px solid rgba(99,102,241,0.2)',
+          borderRadius: '12px', padding: '14px 20px', marginBottom: '24px', flexWrap: 'wrap'
+        }}>
+          <span style={{ fontSize: '1.1rem' }}>🔗</span>
+          <span style={{ color: 'var(--text-secondary)', fontSize: '0.9rem', fontWeight: 500 }}>
+            Your customer chat link:
+          </span>
+          <code style={{
+            flex: 1, background: 'rgba(0,0,0,0.3)', padding: '6px 12px', borderRadius: '6px',
+            fontSize: '0.85rem', color: '#a5b4fc', fontFamily: 'monospace', wordBreak: 'break-all'
+          }}>
+            {typeof window !== 'undefined' ? `${window.location.origin}/chat/${localStorage.getItem('active_business_id')}` : ''}
+          </code>
+          <button
+            onClick={() => {
+              const id = localStorage.getItem('active_business_id');
+              navigator.clipboard.writeText(`${window.location.origin}/chat/${id}`);
+              alert('Chat link copied!');
+            }}
+            style={{
+              background: 'rgba(99,102,241,0.2)', border: '1px solid rgba(99,102,241,0.3)',
+              color: '#a5b4fc', padding: '6px 14px', borderRadius: '6px',
+              cursor: 'pointer', fontSize: '0.85rem', whiteSpace: 'nowrap'
+            }}
+          >
+            Copy
+          </button>
+          <button
+            onClick={() => router.push(`/chat/${localStorage.getItem('active_business_id')}`)}
+            style={{
+              background: 'linear-gradient(135deg, #6366f1, #a855f7)', border: 'none',
+              color: 'white', padding: '6px 14px', borderRadius: '6px',
+              cursor: 'pointer', fontSize: '0.85rem', whiteSpace: 'nowrap', fontWeight: 600
+            }}
+          >
+            Test Chat →
+          </button>
         </div>
 
         {/* Metric Cards */}
