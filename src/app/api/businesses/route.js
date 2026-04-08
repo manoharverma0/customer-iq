@@ -7,6 +7,28 @@ export async function POST(request) {
     const data = await request.json();
     const action = data.action;
 
+    // LOGIN — email + password verification
+    if (action === 'login') {
+      const { email, password } = data;
+      if (!email || !password) {
+        return NextResponse.json({ error: 'Email and password are required' }, { status: 400 });
+      }
+      const { data: profile, error } = await supabase
+        .from('businesses')
+        .select('*')
+        .eq('owner_email', email)
+        .single();
+
+      if (error || !profile) {
+        return NextResponse.json({ error: 'No account found with this email' }, { status: 401 });
+      }
+      if (profile.password !== password) {
+        return NextResponse.json({ error: 'Incorrect password' }, { status: 401 });
+      }
+      return NextResponse.json({ business: profile });
+    }
+
+    // CHECK — email-only lookup (for internal use, e.g. interview page)
     if (action === 'check') {
       const { email } = data;
       const { data: profile, error } = await supabase
@@ -22,9 +44,9 @@ export async function POST(request) {
     }
 
     if (action === 'register') {
-      const { name, industry, owner_name, owner_email, owner_phone } = data;
-      if (!name || !owner_email) {
-        return NextResponse.json({ error: 'Name and Email are required' }, { status: 400 });
+      const { name, industry, owner_name, owner_email, owner_phone, password } = data;
+      if (!name || !owner_email || !password) {
+        return NextResponse.json({ error: 'Name, Email and Password are required' }, { status: 400 });
       }
 
       const { data: newBusiness, error } = await supabase
@@ -35,6 +57,7 @@ export async function POST(request) {
           owner_name,
           owner_email,
           owner_phone,
+          password,                        // stored as plaintext (upgrade to hash for production)
           status: 'pending',
           welcome_message: `Hi there! Welcome to ${name}. How can I assist you today?`,
         })
@@ -90,6 +113,85 @@ export async function POST(request) {
         .single();
 
       if (error) throw error;
+      return NextResponse.json({ business: updatedBusiness });
+    }
+
+    if (action === 'interview_complete') {
+      const { businessId, interviewAnswers } = data;
+      if (!businessId || !interviewAnswers?.length) {
+        return NextResponse.json({ error: 'businessId and interviewAnswers are required' }, { status: 400 });
+      }
+
+      const { data: business } = await supabase.from('businesses').select('*').eq('id', businessId).single();
+      if (!business) return NextResponse.json({ error: 'Business not found' }, { status: 404 });
+
+      // Build a structured transcript from the interview
+      const transcript = interviewAnswers.map((a, i) => {
+        const labels = [
+          'Business Identity & Target Customers',
+          'Products & Services (with prices)',
+          'Customer Journey & Common Requests',
+          'Frequently Asked Questions',
+          'Policies (Shipping, Returns, Payment)',
+          'Brand Voice & Personality',
+        ];
+        return `[${labels[i] || `Question ${i+1}`}]\n${a.answer}`;
+      }).join('\n\n');
+
+      const promptRequest = `You are an expert AI Prompt Engineer specializing in customer service bots.
+
+A business owner just completed an onboarding interview. Based on their responses, write a comprehensive, production-ready SYSTEM PROMPT for their AI customer service agent.
+
+BUSINESS: ${business.name}
+INDUSTRY: ${business.industry}
+OWNER'S INTERVIEW TRANSCRIPT:
+${transcript}
+
+INSTRUCTIONS:
+- Write ONLY the system prompt, nothing else — no intro, no explanation
+- Make it rich and specific — include actual products, prices, policies from the interview
+- Define the AI's personality clearly using the owner's described brand voice
+- Include specific instructions on how to handle common questions from the FAQ section
+- Include clear rules about what to say and what NOT to say
+- End with instructions to always keep conversations open with a follow-up question or CTA
+- Format cleanly with sections and bullet points where helpful`;
+
+      let systemPrompt = '';
+      try {
+        systemPrompt = await generateAIReply(promptRequest, [], '');
+      } catch (err) {
+        console.warn('AI generation failed, using structured fallback:', err.message);
+        systemPrompt = `You are the AI customer service assistant for "${business.name}", a ${business.industry} business.
+
+ABOUT THIS BUSINESS:
+${interviewAnswers[0]?.answer || 'A customer-focused business.'}
+
+PRODUCTS & SERVICES:
+${interviewAnswers[1]?.answer || 'Various products and services.'}
+
+HOW TO HANDLE CUSTOMERS:
+${interviewAnswers[2]?.answer || 'Be helpful and professional.'}
+
+COMMON QUESTIONS TO HANDLE:
+${interviewAnswers[3]?.answer || 'Answer customer queries helpfully.'}
+
+POLICIES:
+${interviewAnswers[4]?.answer || 'Standard policies apply.'}
+
+BRAND VOICE:
+${interviewAnswers[5]?.answer || 'Professional and friendly.'}
+
+Always end your response with a question or next step to keep the conversation going.`;
+      }
+
+      const { data: updatedBusiness, error: updateError } = await supabase
+        .from('businesses')
+        .update({ system_prompt: systemPrompt, status: 'active' })
+        .eq('id', businessId)
+        .select()
+        .single();
+
+      if (updateError) throw updateError;
       return NextResponse.json({ business: updatedBusiness });
     }
 

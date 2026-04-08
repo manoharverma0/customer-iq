@@ -18,10 +18,9 @@ export default function Navbar() {
 
   const links = [
     { href: '/', label: 'Home', icon: '🏠' },
-    { href: '/onboarding', label: 'Get Started', icon: '🚀' },
+    { href: '/login', label: 'Login', icon: '🔑' },
     { href: '/dashboard', label: 'Dashboard', icon: '📊' },
     { href: '/customers', label: 'Customers', icon: '👥' },
-    { href: '/admin', label: 'Admin', icon: '🛡️' },
   ];
 
   return (
