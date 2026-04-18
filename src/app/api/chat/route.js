@@ -2,11 +2,11 @@ import { NextResponse } from 'next/server';
 import { generateAIReply } from '@/lib/gemini';
 import { detectUrgency, getUrgencyConfig } from '@/lib/urgencyDetector';
 import { getSmartFallback } from '@/lib/smartFallback';
-import { createConversation, addMessage, getConversation, logAnalyticsEvent, getBusinessProfile } from '@/lib/supabase';
+import { createConversation, addMessage, getConversation, logAnalyticsEvent, getBusinessProfile, supabase } from '@/lib/supabase';
 
 export async function POST(request) {
   try {
-    const { message, conversationId, conversationHistory, businessId } = await request.json();
+    const { message, conversationId, conversationHistory, businessId, customerName, customerPhone } = await request.json();
 
     if (!message || typeof message !== 'string') {
       return NextResponse.json({ error: 'Message is required' }, { status: 400 });
@@ -26,8 +26,16 @@ export async function POST(request) {
     const dbPromise = (async () => {
       try {
         if (!convId) {
-          const conv = await createConversation(businessId, 'Visitor', 'website');
+          const conv = await createConversation(
+            businessId,
+            customerName || 'Visitor',
+            'website'
+          );
           convId = conv?.id || null;
+          // Save phone number to conversation metadata if provided
+          if (convId && customerPhone) {
+            await supabase?.from('conversations').update({ customer_phone: customerPhone }).eq('id', convId).catch(() => {});
+          }
         }
         if (convId) {
           await addMessage(convId, 'customer', message, urgency, {

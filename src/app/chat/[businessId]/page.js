@@ -13,18 +13,19 @@ export default function ChatPage() {
   const [inputValue, setInputValue] = useState('');
   const [isTyping, setIsTyping] = useState(false);
   const [businessInfo, setBusinessInfo] = useState(null);
+  const [customerName, setCustomerName] = useState('');
+  const [customerPhone, setCustomerPhone] = useState('');
+  const [nameStep, setNameStep] = useState('name'); // 'name' | 'phone' | 'done'
   const messagesEndRef = useRef(null);
   const inputRef = useRef(null);
 
   useEffect(() => {
-    // 1. Fetch business welcome info
     if (businessId) {
       fetch(`/api/businesses?id=${businessId}`)
         .then(res => res.json())
         .then(data => {
           setBusinessInfo(data);
-          
-          // Seed a fake conversation if this is a fresh setup
+          // Show name-collection welcome instead of jumping straight to product chat
           const initialConv = {
             id: 'temp_1',
             customerName: 'You',
@@ -36,7 +37,7 @@ export default function ChatPage() {
               {
                 id: 'm_welcome',
                 role: 'ai',
-                content: data.welcome_message || `Hi there! Welcome to ${data.name}. How can I assist you today?`,
+                content: `Namaste! 🙏 Welcome to ${data.name || 'StyleCraft India'}!\n\nBefore we start, may I know your name? 😊`,
                 timestamp: new Date().toISOString()
               }
             ]
@@ -57,19 +58,48 @@ export default function ChatPage() {
 
   const handleSend = async () => {
     if (!inputValue.trim() || isTyping) return;
+    const text = inputValue.trim();
+    setInputValue('');
 
+    // ── Name collection step ──────────────────────────────────────────────────
+    if (nameStep === 'name') {
+      const name = text;
+      setCustomerName(name);
+
+      // Update conversation display name
+      const nameMsg = { id: `m_${Date.now()}`, role: 'customer', content: name, timestamp: new Date().toISOString() };
+      const phoneAsk = { id: `m_${Date.now()}_ai`, role: 'ai', content: `Nice to meet you, ${name}! 😊\n\nCould you share your phone number so we can follow up if needed?`, timestamp: new Date().toISOString() };
+      const updated = { ...activeConv, customerName: name, messages: [...activeConv.messages, nameMsg, phoneAsk] };
+      setActiveConv(updated);
+      setConversations(prev => prev.map(c => c.id === updated.id ? updated : c));
+      setNameStep('phone');
+      return;
+    }
+
+    if (nameStep === 'phone') {
+      const phone = text;
+      setCustomerPhone(phone);
+      setNameStep('done');
+
+      const phoneMsg = { id: `m_${Date.now()}`, role: 'customer', content: phone, timestamp: new Date().toISOString() };
+      const readyMsg = { id: `m_${Date.now()}_ai`, role: 'ai', content: `Perfect! Got it 📝\n\nHi ${customerName}, I\'m the StyleCraft India AI assistant! I can help you with our sarees, kurtas, lehengas, jewelry, and shirts.\n\n👗 What are you looking for today?`, timestamp: new Date().toISOString() };
+      const updated = { ...activeConv, messages: [...activeConv.messages, phoneMsg, readyMsg] };
+      setActiveConv(updated);
+      setConversations(prev => prev.map(c => c.id === updated.id ? updated : c));
+      return;
+    }
+
+    // ── Normal chat (after name collected) ───────────────────────────────────
     const userMessage = {
       id: `m_${Date.now()}`,
       role: 'customer',
-      content: inputValue.trim(),
+      content: text,
       timestamp: new Date().toISOString(),
     };
 
-    // Add user message
     const updatedMessages = [...(activeConv?.messages || []), userMessage];
     const updatedConv = { ...activeConv, messages: updatedMessages };
     setActiveConv(updatedConv);
-    setInputValue('');
     setIsTyping(true);
 
     try {
@@ -78,13 +108,18 @@ export default function ChatPage() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           businessId,
-          message: userMessage.content,
+          message: text,
+          customerName: customerName || 'Visitor',
+          customerPhone: customerPhone || '',
           conversationHistory: updatedMessages,
           conversationId: activeConv.id.startsWith('temp') ? null : activeConv.id
         }),
       });
 
       const data = await res.json();
+
+      // Once we get a real conversationId back, update the conv id
+      const newConvId = data.conversationId || activeConv.id;
 
       const aiMessage = {
         id: `m_${Date.now()}_ai`,
@@ -94,13 +129,9 @@ export default function ChatPage() {
         urgencyDetected: data.urgency,
       };
 
-      const withAi = { ...updatedConv, messages: [...updatedMessages, aiMessage], urgency: data.urgency };
+      const withAi = { ...updatedConv, id: newConvId, messages: [...updatedMessages, aiMessage], urgency: data.urgency };
       setActiveConv(withAi);
-
-      // Update conversations list
-      setConversations(prev =>
-        prev.map(c => c.id === withAi.id ? withAi : c)
-      );
+      setConversations(prev => prev.map(c => c.id === updatedConv.id ? withAi : c));
     } catch {
       console.error('Failed to get AI reply');
     } finally {
