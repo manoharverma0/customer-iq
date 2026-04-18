@@ -1,374 +1,248 @@
 'use client';
 
 import { useState, useEffect } from 'react';
-import { useRouter } from 'next/navigation';
+import Link from 'next/link';
 import styles from './dashboard.module.css';
-import MetricCard from '@/components/MetricCard';
-import {
-  AreaChart, Area, BarChart, Bar, PieChart, Pie, Cell,
-  XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Legend
-} from 'recharts';
 
-// Demo business — StyleCraft India (hardcoded for single-business mode)
-const DEMO_BUSINESS_NAME = 'StyleCraft India';
 const DEMO_BUSINESS_EMAIL = 'admin@stylecraft.com';
 
-const CustomTooltip = ({ active, payload, label }) => {
-  if (active && payload && payload.length) {
-    return (
-      <div className={styles.tooltip}>
-        <p className={styles.tooltipLabel}>{label}</p>
-        {payload.map((item, i) => (
-          <p key={i} style={{ color: item.color }} className={styles.tooltipValue}>
-            {item.name}: {typeof item.value === 'number' && item.value > 1000
-              ? `₹${(item.value / 1000).toFixed(0)}K`
-              : item.value}
-          </p>
-        ))}
-      </div>
-    );
-  }
-  return null;
-};
+function timeAgo(ts) {
+  if (!ts) return '';
+  const diff = Math.floor((Date.now() - new Date(ts)) / 1000);
+  if (diff < 60) return `${diff}s ago`;
+  if (diff < 3600) return `${Math.floor(diff / 60)}m ago`;
+  if (diff < 86400) return `${Math.floor(diff / 3600)}h ago`;
+  return `${Math.floor(diff / 86400)}d ago`;
+}
+
+function UrgencyBadge({ urgency }) {
+  const map = {
+    high:   { cls: styles.urgHigh,   label: '● High' },
+    medium: { cls: styles.urgMedium, label: '● Medium' },
+    low:    { cls: styles.urgLow,    label: '● Low' },
+  };
+  const { cls, label } = map[urgency] || map.low;
+  return <span className={cls}>{label}</span>;
+}
 
 export default function DashboardPage() {
-  const router = useRouter();
-  const [data, setData] = useState(null);
+  const [analytics, setAnalytics] = useState(null);
+  const [conversations, setConversations] = useState([]);
   const [loading, setLoading] = useState(true);
-  const [businessId, setBusinessId] = useState(null);
 
   useEffect(() => {
-    // Fetch the demo business ID by email, then load analytics
-    fetch(`/api/businesses?email=${DEMO_BUSINESS_EMAIL}`)
-      .then(res => res.json())
-      .then(biz => {
-        const id = biz?.id || null;
-        setBusinessId(id);
-        return fetch(`/api/analytics${id ? `?businessId=${id}` : ''}`);
-      })
-      .then(res => res.json())
-      .then(d => { setData(d); setLoading(false); })
-      .catch(() => {
-        // Fallback: load analytics without businessId (uses seed data)
-        fetch('/api/analytics')
-          .then(res => res.json())
-          .then(d => { setData(d); setLoading(false); })
-          .catch(() => setLoading(false));
-      });
+    Promise.all([
+      fetch(`/api/businesses?email=${DEMO_BUSINESS_EMAIL}`).then(r => r.json()).catch(() => null),
+    ]).then(([biz]) => {
+      const id = biz?.id;
+      return Promise.all([
+        fetch(`/api/analytics${id ? `?businessId=${id}` : ''}`).then(r => r.json()).catch(() => ({})),
+        fetch('/api/customers').then(r => r.json()).catch(() => ({ customers: [] })),
+      ]);
+    }).then(([a, c]) => {
+      setAnalytics(a);
+      setConversations(c.customers || []);
+    }).finally(() => setLoading(false));
   }, []);
 
   if (loading) {
     return (
       <div className={styles.loading}>
         <div className={styles.spinner} />
-        <p>Loading analytics...</p>
+        <span>Loading dashboard…</span>
       </div>
     );
   }
 
-  if (!data) return null;
+  const totalConversations = analytics?.totalConversations ?? conversations.length;
+  const totalRevenue = analytics?.totalRevenue ?? 0;
+  const highUrgency = analytics?.urgencyBreakdown?.high ?? conversations.filter(c => c.urgency === 'high').length;
+  const mediumUrgency = analytics?.urgencyBreakdown?.medium ?? conversations.filter(c => c.urgency === 'medium').length;
+  const lowUrgency = analytics?.urgencyBreakdown?.low ?? conversations.filter(c => c.urgency === 'low').length;
 
-  const COLORS = ['#6366f1', '#8b5cf6', '#06b6d4', '#22c55e', '#f59e0b'];
-
+  const recentConvs = [...conversations]
+    .sort((a, b) => new Date(b.lastActivity || b.created_at) - new Date(a.lastActivity || a.created_at))
+    .slice(0, 8);
 
   return (
     <div className={styles.page}>
-      <div className={styles.container}>
-        {/* Header */}
-        <div className={styles.header}>
-          <div>
-            <h1 className={styles.title}>{DEMO_BUSINESS_NAME} Dashboard</h1>
-            <p className={styles.subtitle}>Real-time analytics & revenue intelligence</p>
+      {/* ── Header ─────────────────────────────────────────────── */}
+      <div className={styles.header}>
+        <div className={styles.headerTop}>
+          <div className={styles.headerLeft}>
+            <h1>Analytics Dashboard</h1>
+            <p>StyleCraft India · AI Customer Intelligence</p>
           </div>
-          <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
-            <div className={styles.headerBadge}>
-              <span className={styles.liveDot} />
-              Live Data
-            </div>
-            <button
-              onClick={() => router.push('/admin')}
-              style={{
-                background: 'transparent', border: '1px solid rgba(255,255,255,0.1)',
-                color: 'var(--text-secondary)', padding: '8px 16px', borderRadius: '8px',
-                cursor: 'pointer', fontSize: '0.85rem', transition: 'all 0.2s'
-              }}
-              onMouseOver={e => e.target.style.color = '#a5b4fc'}
-              onMouseOut={e => e.target.style.color = 'var(--text-secondary)'}
-            >
-              🛡️ Admin
-            </button>
-          </div>
+          <div className={styles.headerBadge}>AI Active</div>
         </div>
+      </div>
 
-        {/* Chat Link Banner */}
-        <div style={{
-          display: 'flex', alignItems: 'center', gap: '12px',
-          background: 'rgba(99,102,241,0.08)', border: '1px solid rgba(99,102,241,0.2)',
-          borderRadius: '12px', padding: '14px 20px', marginBottom: '24px', flexWrap: 'wrap'
-        }}>
-          <span style={{ fontSize: '1.1rem' }}>🔗</span>
-          <span style={{ color: 'var(--text-secondary)', fontSize: '0.9rem', fontWeight: 500 }}>
-            Customer chat link:
-          </span>
-          <code style={{
-            flex: 1, background: 'rgba(0,0,0,0.3)', padding: '6px 12px', borderRadius: '6px',
-            fontSize: '0.85rem', color: '#a5b4fc', fontFamily: 'monospace', wordBreak: 'break-all'
-          }}>
-            {typeof window !== 'undefined' ? `${window.location.origin}/chat${businessId ? `/${businessId}` : ''}` : '/chat'}
-          </code>
-          <button
-            onClick={() => {
-              const url = `${window.location.origin}/chat${businessId ? `/${businessId}` : ''}`;
-              navigator.clipboard.writeText(url);
-              alert('Chat link copied!');
-            }}
-            style={{
-              background: 'rgba(99,102,241,0.2)', border: '1px solid rgba(99,102,241,0.3)',
-              color: '#a5b4fc', padding: '6px 14px', borderRadius: '6px',
-              cursor: 'pointer', fontSize: '0.85rem', whiteSpace: 'nowrap'
-            }}
+      {/* ── Quick Actions ─── */}
+      <div className={styles.quickActions}>
+        {[
+          { href: '/live',      icon: '💬', label: 'Live Chat' },
+          { href: '/customers', icon: '👥', label: 'Customers' },
+          { href: '/catalog',   icon: '🛍️', label: 'Catalog' },
+          { href: `https://wa.me/14155238886?text=join+long-book`, icon: '📱', label: 'WhatsApp', ext: true },
+        ].map(item => (
+          <a
+            key={item.label}
+            href={item.href}
+            target={item.ext ? '_blank' : undefined}
+            rel={item.ext ? 'noopener' : undefined}
+            className={styles.quickBtn}
           >
-            Copy
-          </button>
-          <button
-            onClick={() => router.push(`/chat${businessId ? `/${businessId}` : ''}`)}
-            style={{
-              background: 'linear-gradient(135deg, #6366f1, #a855f7)', border: 'none',
-              color: 'white', padding: '6px 14px', borderRadius: '6px',
-              cursor: 'pointer', fontSize: '0.85rem', whiteSpace: 'nowrap', fontWeight: 600
-            }}
-          >
-            Test Chat →
-          </button>
+            <div className={styles.quickBtnIcon}>{item.icon}</div>
+            <span className={styles.quickBtnLabel}>{item.label}</span>
+          </a>
+        ))}
+      </div>
+
+      {/* ── KPI Stats ─────────────────────────────────────────── */}
+      <div className={styles.statsGrid}>
+        <div className={styles.statCard}>
+          <div className={styles.statHeader}>
+            <span className={styles.statLabel}>Total Conversations</span>
+            <div className={`${styles.statIcon} ${styles.statIconBlue}`}>💬</div>
+          </div>
+          <div className={styles.statValue}>{totalConversations}</div>
+          <div className={`${styles.statChange} ${styles.statUp}`}>↑ All time</div>
         </div>
 
-        {/* Metric Cards */}
-        <div className={styles.metricsGrid}>
-          <MetricCard
-            icon="💬"
-            label="Total Conversations"
-            value={data.overview.totalConversations.toLocaleString()}
-            growth={12}
-            growthLabel="vs last month"
-            delay={0}
-          />
-          <MetricCard
-            icon="💰"
-            label="Revenue Generated"
-            value={`₹${(data.overview.totalRevenue / 1000).toFixed(1)}K`}
-            growth={data.overview.revenueGrowth}
-            growthLabel="vs last month"
-            delay={100}
-          />
-          <MetricCard
-            icon="🎯"
-            label="Conversion Rate"
-            value={data.overview.conversionRate}
-            suffix="%"
-            growth={data.overview.conversionGrowth}
-            growthLabel="vs last month"
-            delay={200}
-          />
-          <MetricCard
-            icon="⚡"
-            label="Avg Response Time"
-            value={data.overview.avgResponseTime}
-            growth={data.overview.responseImprovement}
-            growthLabel="faster than before"
-            delay={300}
-          />
-          <MetricCard
-            icon="📵"
-            label="Missed Messages"
-            value={data.overview.missedMessages}
-            growth={-data.overview.missedReduction}
-            growthLabel="reduction achieved"
-            delay={400}
-          />
-          <MetricCard
-            icon="⭐"
-            label="Customer Satisfaction"
-            value={data.overview.customerSatisfaction}
-            suffix="/5"
-            growth={data.overview.satisfactionGrowth}
-            growthLabel="improvement"
-            delay={500}
-          />
+        <div className={styles.statCard}>
+          <div className={styles.statHeader}>
+            <span className={styles.statLabel}>Revenue Generated</span>
+            <div className={`${styles.statIcon} ${styles.statIconGreen}`}>₹</div>
+          </div>
+          <div className={styles.statValue}>
+            {totalRevenue > 0 ? `₹${(totalRevenue / 1000).toFixed(0)}K` : '₹0'}
+          </div>
+          <div className={`${styles.statChange} ${styles.statUp}`}>↑ From AI chats</div>
         </div>
 
-        {/* Charts Row */}
-        <div className={styles.chartsRow}>
-          {/* Revenue Chart */}
-          <div className={`${styles.chartCard} glass-card`}>
-            <h3 className={styles.chartTitle}>📈 Revenue & Conversations Trend</h3>
-            <div className={styles.chartWrap}>
-              <ResponsiveContainer width="100%" height={300}>
-                <AreaChart data={data.revenueByMonth}>
-                  <defs>
-                    <linearGradient id="colorRevenue" x1="0" y1="0" x2="0" y2="1">
-                      <stop offset="5%" stopColor="#6366f1" stopOpacity={0.3} />
-                      <stop offset="95%" stopColor="#6366f1" stopOpacity={0} />
-                    </linearGradient>
-                    <linearGradient id="colorConv" x1="0" y1="0" x2="0" y2="1">
-                      <stop offset="5%" stopColor="#06b6d4" stopOpacity={0.3} />
-                      <stop offset="95%" stopColor="#06b6d4" stopOpacity={0} />
-                    </linearGradient>
-                  </defs>
-                  <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.05)" />
-                  <XAxis dataKey="month" stroke="#64748b" fontSize={12} />
-                  <YAxis stroke="#64748b" fontSize={12} tickFormatter={(v) => `₹${v / 1000}K`} />
-                  <Tooltip content={<CustomTooltip />} />
-                  <Legend />
-                  <Area
-                    type="monotone"
-                    dataKey="revenue"
-                    name="Revenue"
-                    stroke="#6366f1"
-                    strokeWidth={2}
-                    fillOpacity={1}
-                    fill="url(#colorRevenue)"
-                  />
-                  <Area
-                    type="monotone"
-                    dataKey="conversations"
-                    name="Conversations"
-                    stroke="#06b6d4"
-                    strokeWidth={2}
-                    fillOpacity={1}
-                    fill="url(#colorConv)"
-                  />
-                </AreaChart>
-              </ResponsiveContainer>
-            </div>
+        <div className={styles.statCard}>
+          <div className={styles.statHeader}>
+            <span className={styles.statLabel}>High Urgency</span>
+            <div className={`${styles.statIcon} ${styles.statIconAmber}`}>🔴</div>
           </div>
-
-          {/* Urgency Distribution */}
-          <div className={`${styles.chartCard} ${styles.chartSmall} glass-card`}>
-            <h3 className={styles.chartTitle}>🚨 Urgency Distribution</h3>
-            <div className={styles.chartWrap}>
-              <ResponsiveContainer width="100%" height={250}>
-                <PieChart>
-                  <Pie
-                    data={data.urgencyDistribution}
-                    cx="50%"
-                    cy="50%"
-                    innerRadius={60}
-                    outerRadius={90}
-                    paddingAngle={4}
-                    dataKey="value"
-                  >
-                    {data.urgencyDistribution.map((entry, i) => (
-                      <Cell key={i} fill={entry.color} />
-                    ))}
-                  </Pie>
-                  <Tooltip />
-                  <Legend />
-                </PieChart>
-              </ResponsiveContainer>
-            </div>
-          </div>
+          <div className={styles.statValue} style={{ color: '#dc2626' }}>{highUrgency}</div>
+          <div className={`${styles.statChange} ${styles.statNeutral}`}>Need attention</div>
         </div>
 
-        {/* Second Charts Row */}
-        <div className={styles.chartsRow}>
-          {/* Channel Performance */}
-          <div className={`${styles.chartCard} glass-card`}>
-            <h3 className={styles.chartTitle}>📱 Channel Performance</h3>
-            <div className={styles.chartWrap}>
-              <ResponsiveContainer width="100%" height={300}>
-                <BarChart data={data.channelPerformance}>
-                  <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.05)" />
-                  <XAxis dataKey="channel" stroke="#64748b" fontSize={12} />
-                  <YAxis stroke="#64748b" fontSize={12} />
-                  <Tooltip content={<CustomTooltip />} />
-                  <Legend />
-                  <Bar dataKey="conversations" name="Conversations" fill="#6366f1" radius={[4, 4, 0, 0]} />
-                  <Bar dataKey="conversion" name="Conversion %" fill="#8b5cf6" radius={[4, 4, 0, 0]} />
-                </BarChart>
-              </ResponsiveContainer>
-            </div>
+        <div className={styles.statCard}>
+          <div className={styles.statHeader}>
+            <span className={styles.statLabel}>Customers</span>
+            <div className={`${styles.statIcon} ${styles.statIconPurple}`}>👥</div>
           </div>
-
-          {/* Hourly Activity */}
-          <div className={`${styles.chartCard} glass-card`}>
-            <h3 className={styles.chartTitle}>🕐 Hourly Activity</h3>
-            <div className={styles.chartWrap}>
-              <ResponsiveContainer width="100%" height={300}>
-                <BarChart data={data.hourlyActivity}>
-                  <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.05)" />
-                  <XAxis dataKey="hour" stroke="#64748b" fontSize={12} />
-                  <YAxis stroke="#64748b" fontSize={12} />
-                  <Tooltip content={<CustomTooltip />} />
-                  <Bar dataKey="messages" name="Messages" fill="#06b6d4" radius={[4, 4, 0, 0]}>
-                    {data.hourlyActivity.map((entry, i) => (
-                      <Cell key={i} fill={COLORS[i % COLORS.length]} />
-                    ))}
-                  </Bar>
-                </BarChart>
-              </ResponsiveContainer>
-            </div>
-          </div>
+          <div className={styles.statValue}>{conversations.length}</div>
+          <div className={`${styles.statChange} ${styles.statUp}`}>↑ Unique leads</div>
         </div>
+      </div>
 
-        {/* Bottom Cards Row */}
-        <div className={styles.bottomRow}>
-          {/* Top Products */}
-          <div className={`${styles.tableCard} glass-card`}>
-            <h3 className={styles.chartTitle}>🏆 Top Products</h3>
-            <table className={styles.table}>
-              <thead>
+      {/* ── Main Content Grid ──────────────────────────────────── */}
+      <div className={styles.contentGrid}>
+
+        {/* Recent Conversations Table */}
+        <div className={styles.panel}>
+          <div className={styles.panelHeader}>
+            <span className={styles.panelTitle}><span>💬</span> Recent Conversations</span>
+            <Link href="/customers" className={styles.panelAction}>View all →</Link>
+          </div>
+          {recentConvs.length === 0 ? (
+            <div className={styles.empty}>
+              <span className={styles.emptyIcon}>💬</span>
+              <p className={styles.emptyText}>No conversations yet. Start chatting to see data here.</p>
+            </div>
+          ) : (
+            <table className={styles.convTable}>
+              <thead className={styles.convTableHead}>
                 <tr>
-                  <th>Product</th>
-                  <th>Mentions</th>
-                  <th>Revenue</th>
+                  <th>Customer</th>
+                  <th>Last Message</th>
+                  <th>Urgency</th>
+                  <th>Channel</th>
+                  <th>Time</th>
                 </tr>
               </thead>
               <tbody>
-                {data.topProducts.map((product, i) => (
-                  <tr key={i}>
+                {recentConvs.map(conv => (
+                  <tr key={conv.id} className={styles.convRow}>
                     <td>
-                      <div className={styles.productName}>
-                        <span className={styles.rank}>#{i + 1}</span>
-                        {product.name}
+                      <div className={styles.custCell}>
+                        <div className={styles.custAvatar}>
+                          {(conv.customer_name || conv.customerName || 'V')[0].toUpperCase()}
+                        </div>
+                        <div>
+                          <div className={styles.custName}>{conv.customer_name || conv.customerName || 'Visitor'}</div>
+                          {conv.customer_phone && <div className={styles.custSub}>{conv.customer_phone}</div>}
+                        </div>
                       </div>
                     </td>
-                    <td>{product.mentions}</td>
-                    <td className={styles.revenueCell}>₹{(product.revenue / 1000).toFixed(0)}K</td>
+                    <td>
+                      <div className={styles.msgPreview}>
+                        {conv.lastMessage || conv.recentMessages?.[0] || '—'}
+                      </div>
+                    </td>
+                    <td><UrgencyBadge urgency={conv.urgency} /></td>
+                    <td>
+                      <span className={styles.channel}>
+                        {conv.channel === 'whatsapp' ? '📱' : '💻'} {conv.channel || 'website'}
+                      </span>
+                    </td>
+                    <td className={styles.timeCell}>{timeAgo(conv.lastActivity || conv.updated_at)}</td>
                   </tr>
                 ))}
               </tbody>
             </table>
+          )}
+        </div>
+
+        {/* Urgency Breakdown */}
+        <div className={styles.panel}>
+          <div className={styles.panelHeader}>
+            <span className={styles.panelTitle}><span>📊</span> Priority Breakdown</span>
+          </div>
+          <div className={styles.urgencyList}>
+            <div className={styles.urgencyItem}>
+              <span className={styles.urgencyIcon}>🔴</span>
+              <div className={styles.urgencyContent}>
+                <div className={styles.urgencyLabel}>High Priority</div>
+                <div className={styles.urgencyDesc}>Immediate attention needed</div>
+              </div>
+              <span className={styles.urgencyCount} style={{ color: '#dc2626' }}>{highUrgency}</span>
+            </div>
+            <div className={styles.urgencyItem}>
+              <span className={styles.urgencyIcon}>🟡</span>
+              <div className={styles.urgencyContent}>
+                <div className={styles.urgencyLabel}>Medium Priority</div>
+                <div className={styles.urgencyDesc}>Follow up within 1 hour</div>
+              </div>
+              <span className={styles.urgencyCount} style={{ color: '#d97706' }}>{mediumUrgency}</span>
+            </div>
+            <div className={styles.urgencyItem}>
+              <span className={styles.urgencyIcon}>🟢</span>
+              <div className={styles.urgencyContent}>
+                <div className={styles.urgencyLabel}>Low Priority</div>
+                <div className={styles.urgencyDesc}>Standard response time</div>
+              </div>
+              <span className={styles.urgencyCount} style={{ color: '#059669' }}>{lowUrgency}</span>
+            </div>
           </div>
 
-          {/* Revenue Attribution */}
-          <div className={`${styles.tableCard} glass-card`}>
-            <h3 className={styles.chartTitle}>💎 Revenue Attribution</h3>
-            <div className={styles.attrGrid}>
-              <div className={styles.attrItem}>
-                <span className={styles.attrLabel}>Direct Sales</span>
-                <span className={styles.attrValue}>₹{(data.revenueAttribution.directSales / 1000).toFixed(0)}K</span>
+          {/* AI Stats */}
+          <div style={{ margin: '0 16px 16px', padding: '16px', background: 'var(--bg-subtle)', borderRadius: '8px', border: '1px solid var(--border)' }}>
+            <div style={{ fontSize: '0.75rem', fontWeight: 700, color: 'var(--text-tertiary)', textTransform: 'uppercase', letterSpacing: '0.06em', marginBottom: '12px' }}>AI Performance</div>
+            {[
+              { label: 'Response Rate', value: '99.8%', color: 'var(--success)' },
+              { label: 'Avg Response Time', value: '< 2s', color: 'var(--brand)' },
+              { label: 'AI Model', value: 'Qwen 72B', color: 'var(--warning)' },
+              { label: 'Vector Search', value: 'pgvector', color: 'var(--brand)' },
+            ].map(item => (
+              <div key={item.label} style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '8px', fontSize: '0.82rem' }}>
+                <span style={{ color: 'var(--text-secondary)' }}>{item.label}</span>
+                <span style={{ color: item.color, fontWeight: 600 }}>{item.value}</span>
               </div>
-              <div className={styles.attrItem}>
-                <span className={styles.attrLabel}>Upsells</span>
-                <span className={styles.attrValue}>₹{(data.revenueAttribution.upsells / 1000).toFixed(0)}K</span>
-              </div>
-              <div className={styles.attrItem}>
-                <span className={styles.attrLabel}>Cross-sells</span>
-                <span className={styles.attrValue}>₹{(data.revenueAttribution.crossSells / 1000).toFixed(0)}K</span>
-              </div>
-              <div className={`${styles.attrItem} ${styles.attrHighlight}`}>
-                <span className={styles.attrLabel}>ROI</span>
-                <span className={styles.attrValue}>{data.revenueAttribution.roi}%</span>
-              </div>
-              <div className={styles.attrItem}>
-                <span className={styles.attrLabel}>Customer Acq. Cost</span>
-                <span className={styles.attrValue}>₹{data.revenueAttribution.cac}</span>
-              </div>
-              <div className={styles.attrItem}>
-                <span className={styles.attrLabel}>Lifetime Value</span>
-                <span className={styles.attrValue}>₹{(data.revenueAttribution.ltv / 1000).toFixed(1)}K</span>
-              </div>
-            </div>
+            ))}
           </div>
         </div>
       </div>

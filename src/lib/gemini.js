@@ -1,173 +1,187 @@
 // ─────────────────────────────────────────────────────────────────────────────
 // AI Reply Generation — HuggingFace Inference API
-// Dynamic prompting based on buyer intent:
-//   strong_buy  → High-energy closer, push to payment
-//   soft_buy    → Consultative salesperson, qualify + pitch
-//   browse      → Helpful product guide
-//   support     → Empathetic resolution agent
+// Anti-hallucination architecture:
+//   1. ALL products + prices embedded as ground truth (never rely on model memory)
+//   2. Temperature 0.1 — minimal creativity, maximum accuracy
+//   3. Short, tight prompt — smaller models obey short prompts, ignore long ones
+//   4. Post-generation validator — catches hallucinated prices/topics
+//   5. Graceful fallback if validation fails
 // ─────────────────────────────────────────────────────────────────────────────
 
 const HF_API_BASE = 'https://api-inference.huggingface.co/models';
 
+// Model waterfall: fastest/best first
 const MODELS = [
   'Qwen/Qwen2.5-72B-Instruct',
   'mistralai/Mistral-7B-Instruct-v0.3',
   'HuggingFaceH4/zephyr-7b-beta',
 ];
 
-// ─── SALES KNOWLEDGE BASE ─────────────────────────────────────────────────────
-// This is where the real intelligence lives.
-// The AI learns HOW to sell, not just WHAT to sell.
+// ─── GROUND TRUTH CATALOG ─────────────────────────────────────────────────────
+// These exact prices/products are ALWAYS injected into the prompt.
+// This is the single source of truth. The AI CANNOT invent prices not listed here.
 // ─────────────────────────────────────────────────────────────────────────────
+const GROUND_TRUTH_CATALOG = `
+OUR EXACT PRODUCT LIST (use ONLY these — no other products exist):
+1. Banarasi Silk Saree (Maroon)  — ₹5,299  | was ₹7,999 | 34% OFF | Wedding/festive | Free size
+2. Emerald Silk Saree (Green)    — ₹4,499  | was ₹6,499 | 31% OFF | Festival/function | Free size
+3. Royal Designer Kurta (Blue)   — ₹1,499  | was ₹2,299 | 35% OFF | Ethnic/wedding | Sizes: S,M,L,XL,XXL
+4. Bridal Lehenga Choli (Pink)   — ₹8,999  | was ₹15,999 | 44% OFF | Bridal/engagement | Sizes: XS–XL + Custom
+5. Kundan Jewelry Set            — ₹3,199  | was ₹5,499 | 42% OFF | Bridal/festive | Necklace+earrings+tikka
+6. Premium Linen Shirt (Cream)   — ₹899   | was ₹1,499 | 40% OFF | Casual/summer | Sizes: S,M,L,XL,XXL
 
-const SALES_PLAYBOOK = {
+POLICIES:
+- Shipping: FREE above ₹999 | 3-5 days standard | Express ₹299 (next-day)
+- Returns: 7-day easy returns, no questions asked, free pickup
+- Payment: UPI, Credit/Debit Card, Net Banking, Cash on Delivery (COD)
+- Custom sizing available for lehengas at no extra cost
+`.trim();
 
-  strong_buy: `
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-🔥 SALES MODE: HOT LEAD — CLOSE THE DEAL
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-The customer is READY TO BUY. Your job is to CLOSE, not just inform.
+// ─── VALID PRICE SET (for hallucination detection) ────────────────────────────
+const VALID_PRICES = new Set([5299, 7999, 4499, 6499, 1499, 2299, 8999, 15999, 3199, 5499, 899, 1499, 299, 999]);
+const OFF_TOPIC_WORDS = ['bike', 'motorcycle', 'car', 'vehicle', 'laptop', 'phone', 'mobile', 'pizza', 'food', 'medicine', 'hotel'];
 
-CLOSING SCRIPT:
-1. Confirm what they want (product, size, color)
-2. Create urgency: "This design is flying off shelves!" or "Only 3 pieces left at this price!"
-3. Make payment feel easy: "You can pay via UPI, card, or even COD. Which works for you?"
-4. Remove friction: Offer to take the order RIGHT NOW via WhatsApp
-5. Reassure: "Free shipping + 7-day return — zero risk!"
+// ─── PROMPT BUILDER ───────────────────────────────────────────────────────────
+function buildPrompt(dbSystemPrompt, retrievedProducts, businessName, buyerIntent) {
 
-POWER PHRASES TO USE:
-- "Great choice! This is one of our bestsellers this season 🌟"
-- "I can book this for you right now — just share your delivery address!"
-- "Limited stock at this price — shall I hold it for you?"
-- "You've made an excellent decision. Let's get this delivered to you!"
+  // ── Persona (from DB or default) ──────────────────────────────────────────
+  const persona = dbSystemPrompt
+    ? dbSystemPrompt.slice(0, 800) // Use first 800 chars — smaller models ignore long prompts
+    : `You are Priya, the friendly AI assistant for ${businessName}. You help customers find the perfect ethnic wear.`;
 
-NEVER:
-- Ask them to "visit our website" without giving them a direct path
-- Stall with "let me check" — just confirm and close
-- Oversell or overpromise — stay honest about actual products
+  // ── Sales tone (SHORT — 3 lines max per mode) ─────────────────────────────
+  const salesTone = {
+    strong_buy: `Customer is ready to buy. Confirm their choice, create mild urgency ("limited stock!"), make payment easy (UPI/COD/card), ask for delivery address to close the order.`,
+    soft_buy:   `Customer is interested. Ask ONE qualifying question (occasion? budget?), then recommend the BEST matching product with exact price. Offer to help order.`,
+    browse:     `Customer is exploring. Recommend 1-2 products that match their interest, describe the occasion they're perfect for, end with a question to engage them further.`,
+    support:    `Customer has an issue. Acknowledge with empathy first, state the policy clearly (7-day returns, 24h refund), offer resolution. Be calm and reassuring.`,
+  }[buyerIntent] || `Be helpful and recommend relevant products from our catalog.`;
 
-HOW TO HANDLE OBJECTIONS FAST:
-- "Too expensive" → "We have EMI. Also this is 40% off already — limited time!"
-- "I'll think" → "Totally! But this design might sell out. Want me to hold 1 piece for 24h?"
-- "I'll come to shop" → "You can order right here on WhatsApp! Faster and we deliver free."
-`,
-
-  soft_buy: `
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-🎯 SALES MODE: WARM LEAD — QUALIFY & PITCH
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-The customer is interested but hasn't decided. Your goal: understand their need and pitch the PERFECT product.
-
-CONSULTATIVE SELLING FRAMEWORK:
-1. Ask ONE qualifying question (occasion? budget? who is it for?)
-2. Based on their answer, recommend 1-2 SPECIFIC products with prices
-3. Highlight the VALUE not just the price
-4. Add a social proof: "This has been ordered 200+ times this month!"
-5. Create mild urgency: "Festival season is close — orders are going fast!"
-
-QUALIFYING QUESTIONS (use one at a time):
-- "May I ask — is this for a wedding, festival, or daily wear? That helps me pick the best for you!"
-- "What's the approximate budget you're looking at? I'll show you the best in that range!"
-- "Is this for yourself or as a gift? I have some amazing options either way!"
-
-PITCH STRUCTURE (for each product):
-- Lead with the OCCASION FIT, not the product name
-- State the price + discount boldly: "₹4,499 — was ₹6,499, you save ₹2,000!"
-- One emotional hook: "The embroidery is done by Banaras artisans — truly one of a kind!"
-- Call-to-action: "Want to see more photos? Or shall I share full details?"
-
-UPSELLING:
-- Saree buyer → suggest matching Kundan jewelry set
-- Lehenga buyer → suggest matching blouse customization
-- Kurta buyer → suggest coordinating bottom wear
-`,
-
-  browse: `
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-🛍️ BROWSE MODE: INSPIRE & ENGAGE
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-Customer is exploring. Your goal: make them fall in love with a product.
-
-STRATEGY:
-1. Be warm and welcoming — make them feel like they walked into a beautiful boutique
-2. Show 1-2 products that match their vague interest
-3. Paint a vivid picture: "Imagine wearing this at a wedding — all eyes on you!"
-4. Transition them toward buying intent: Ask about their occasion or budget
-
-DO:
-- Use descriptive, sensory language ("pure silk", "hand-embroidered", "rich zari")
-- Mention the occasion it's perfect for
-- End with "Would you like to see more from this collection?" 
-- Always show price (transparency builds trust)
-
-DON'T:
-- Overwhelm with 5+ products at once
-- Be too salesy — they're just browsing, earn their interest first
-`,
-
-  support: `
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-🤝 SUPPORT MODE: RESOLVE WITH EMPATHY
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-Customer has an issue. Your goal: RESOLVE IT FAST and rebuild trust.
-
-EMPATHY FRAMEWORK:
-1. Acknowledge the problem FIRST ("I completely understand, this is frustrating")
-2. Take ownership ("I'm going to sort this out for you right now")
-3. Give a clear resolution path
-4. Offer something extra to rebuild goodwill
-
-POLICIES (state clearly):
-- 7-day returns: No questions asked, free pickup
-- Refunds: Processed within 24 hours
-- Exchange: Size/color swap available free of charge
-- Complaints: Escalated to senior team within 1 hour
-
-NEVER say "I can't help" — always escalate upward or offer an alternative.
-NEVER be defensive — the customer's frustration is valid.
-`,
-};
-
-// ─── SYSTEM PROMPT BUILDER ────────────────────────────────────────────────────
-function buildSystemPrompt(dbSystemPrompt, retrievedProducts = [], businessName = 'StyleCraft India', buyerIntent = 'browse') {
-
-  // Base persona from DB (most important — business owner configured this)
-  const base = dbSystemPrompt || `
-You are "Priya", the AI sales assistant for ${businessName}.
-You are warm, knowledgeable about Indian fashion, and genuinely passionate about helping customers find the perfect outfit.
-You ONLY discuss ${businessName} products and services.
-NEVER discuss unrelated topics (vehicles, electronics, food, etc.).
-If asked off-topic: "I'm Priya from ${businessName}! I can only help with our products. What occasion are you shopping for? 😊"
-  `.trim();
-
-  // Sales playbook based on detected intent
-  const salesMode = SALES_PLAYBOOK[buyerIntent] || SALES_PLAYBOOK.browse;
-
-  // Vector-retrieved products (injected as live context)
-  let productContext = '';
+  // ── Relevant products (from vector search — specific match) ───────────────
+  let relevantSection = '';
   if (retrievedProducts && retrievedProducts.length > 0) {
-    productContext = `
-
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-📦 PRODUCTS MATCHING THIS QUERY (use these first):
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-${retrievedProducts.map((p, i) => `
-${i + 1}. ${p.name}
-   💰 Price: ₹${p.price?.toLocaleString('en-IN')}${p.original_price ? ` (was ₹${p.original_price?.toLocaleString('en-IN')}, ${p.discount}% OFF)` : ''}
-   📝 ${p.description}
-   🏷️ Tags: ${p.tags?.join(', ')}
-   📐 Sizes: ${p.sizes?.join(', ')}
-   🎯 Relevance: ${((p.similarity || 0) * 100).toFixed(0)}% match
-`).join('')}
-Reference the matching products above in your reply. Use their EXACT prices and descriptions.
-DO NOT invent products, prices, or discounts that aren't listed above or in your catalog.
-`;
+    relevantSection = `\nBEST MATCHING PRODUCTS FOR THIS QUERY:\n` +
+      retrievedProducts.map((p, i) =>
+        `${i + 1}. ${p.name} — ₹${p.price} (${p.discount}% OFF) | ${p.description?.slice(0, 80)}`
+      ).join('\n');
   }
 
-  return `${base}\n\n${salesMode}\n${productContext}`;
+  // ── Final prompt (kept SHORT for smaller model compliance) ────────────────
+  return `${persona}
+
+${GROUND_TRUTH_CATALOG}
+${relevantSection}
+
+YOUR ROLE: ${salesTone}
+
+STRICT RULES (NEVER break these):
+- ONLY discuss the 6 products listed above. No other products exist.
+- NEVER give prices, names or details for products not in our list (bikes, electronics, food, etc.)
+- If asked off-topic: "I'm Priya from ${businessName}! I only help with our ethnic wear. What occasion are you shopping for? 😊"
+- Use EXACT prices from the list. Do NOT invent discounts or products.
+- Keep replies under 5 sentences. Be warm, specific, and helpful.`;
 }
 
-// ─── MAIN AI REPLY GENERATOR ──────────────────────────────────────────────────
+// ─── HALLUCINATION VALIDATOR ──────────────────────────────────────────────────
+function validateResponse(text, message) {
+  if (!text) return false;
+
+  const lower = text.toLowerCase();
+  const msgLower = message.toLowerCase();
+
+  // Check 1: Off-topic product category
+  for (const word of OFF_TOPIC_WORDS) {
+    if (lower.includes(word) && !msgLower.includes(word)) {
+      console.warn(`🚨 Hallucination detected: off-topic word "${word}" in response`);
+      return false;
+    }
+  }
+
+  // Check 2: Suspicious price mentions (extract numbers > 100 from response)
+  const priceMatches = text.match(/₹\s*(\d{2,6})/g) || [];
+  for (const match of priceMatches) {
+    const num = parseInt(match.replace(/[₹,\s]/g, ''));
+    if (num > 100 && !VALID_PRICES.has(num)) {
+      console.warn(`🚨 Hallucination detected: invented price ₹${num} in response`);
+      return false;
+    }
+  }
+
+  // Check 3: Response must not be empty or too short
+  if (text.trim().length < 20) return false;
+
+  return true;
+}
+
+// ─── SAFE FALLBACK (when AI fails or hallucinates) ────────────────────────────
+function getSafeFallback(message, buyerIntent) {
+  const lower = message.toLowerCase();
+
+  // Saree
+  if (/saree|sari|banarasi|silk/i.test(lower)) {
+    return `We have two gorgeous silk sarees right now:\n\n` +
+      `1. 👗 Banarasi Silk Saree (Maroon) — ₹5,299 (was ₹7,999) | Perfect for weddings\n` +
+      `2. 👗 Emerald Silk Saree (Green) — ₹4,499 (was ₹6,499) | Great for festivals\n\n` +
+      `Both come with matching blouse piece and free shipping! Which appeals to you? 😊`;
+  }
+  // Lehenga / bridal
+  if (/lehenga|bridal|bride|wedding dress|choli/i.test(lower)) {
+    return `Our Bridal Lehenga Choli (Pink) is stunning! 💃\n\n` +
+      `💰 ₹8,999 (was ₹15,999 — 44% OFF)\n` +
+      `✨ Zardozi + mirror embroidery, full bridal set with dupatta\n` +
+      `📐 Custom sizing available\n\n` +
+      `For a bridal piece at this price, it's unbeatable value! Shall I share full details? 😊`;
+  }
+  // Kurta
+  if (/kurta|kurtas|ethnic wear/i.test(lower)) {
+    return `Our Royal Designer Kurta (Blue) is a bestseller!\n\n` +
+      `💰 ₹1,499 (was ₹2,299 — 35% OFF)\n` +
+      `✨ Hand-embroidered collar, cotton-silk blend\n` +
+      `📐 Sizes: S, M, L, XL, XXL\n\n` +
+      `Perfect for weddings, pujas, and festivals! Want to order one? 😊`;
+  }
+  // Jewelry
+  if (/jewelry|jewellery|necklace|kundan|earring/i.test(lower)) {
+    return `Our Kundan Jewelry Set is perfect! 💎\n\n` +
+      `💰 ₹3,199 (was ₹5,499 — 42% OFF)\n` +
+      `✨ Full bridal set: necklace + earrings + maang tikka\n` +
+      `Complements our lehengas and sarees beautifully!\n\n` +
+      `Interested in ordering? 😊`;
+  }
+  // Shirt
+  if (/shirt|linen|casual/i.test(lower)) {
+    return `Our Premium Linen Shirt (Cream) is perfect for summer!\n\n` +
+      `💰 ₹899 (was ₹1,499 — 40% OFF)\n` +
+      `✨ Pure linen, breathable, slim fit\n` +
+      `📐 Sizes: S, M, L, XL, XXL\n\n` +
+      `Want one? You can order right here! 😊`;
+  }
+  // Price / budget
+  if (/price|budget|how much|kitna|cost/i.test(lower)) {
+    return `Here's our full price list:\n\n` +
+      `👗 Banarasi Silk Saree — ₹5,299\n` +
+      `👗 Emerald Silk Saree — ₹4,499\n` +
+      `👔 Designer Kurta (Blue) — ₹1,499\n` +
+      `💃 Bridal Lehenga Choli — ₹8,999\n` +
+      `💎 Kundan Jewelry Set — ₹3,199\n` +
+      `👕 Linen Shirt (Cream) — ₹899\n\n` +
+      `All have 30–44% discount! Which interests you? 😊`;
+  }
+  // Greeting
+  if (/hi|hello|hey|namaste/i.test(lower)) {
+    return `Namaste! 🙏 Welcome to StyleCraft India!\n\n` +
+      `I'm Priya, your personal fashion assistant. We have beautiful ethnic wear:\n` +
+      `👗 Silk Sarees | 💃 Bridal Lehengas | 👔 Kurtas | 💎 Jewelry | 👕 Shirts\n\n` +
+      `What occasion are you shopping for? 😊`;
+  }
+
+  return `Namaste! 🙏 I'm Priya from StyleCraft India. I can help you with:\n\n` +
+    `👗 Silk Sarees (₹4,499–₹5,299) | 💃 Lehengas (₹8,999) | 👔 Kurtas (₹1,499)\n` +
+    `💎 Jewelry Sets (₹3,199) | 👕 Linen Shirts (₹899)\n\n` +
+    `What are you looking for today? 😊`;
+}
+
+// ─── MAIN FUNCTION ────────────────────────────────────────────────────────────
 export async function generateAIReply(
   message,
   conversationHistory = [],
@@ -177,13 +191,19 @@ export async function generateAIReply(
   buyerIntent = 'browse'
 ) {
   const hfToken = process.env.HF_TOKEN;
-  if (!hfToken) throw new Error('HF_TOKEN not set');
 
-  const systemPrompt = buildSystemPrompt(dbSystemPrompt, retrievedProducts, businessName, buyerIntent);
+  // If no HF token, use safe deterministic fallback immediately
+  if (!hfToken) {
+    console.warn('HF_TOKEN not set — using safe fallback');
+    return getSafeFallback(message, buyerIntent);
+  }
+
+  const systemPrompt = buildPrompt(dbSystemPrompt, retrievedProducts, businessName, buyerIntent);
 
   const messages = [
     { role: 'system', content: systemPrompt },
-    ...conversationHistory.slice(-15), // Last 15 messages = true stateful context
+    // Include last 10 messages of history (enough context, not too much noise)
+    ...conversationHistory.slice(-10),
     { role: 'user', content: message },
   ];
 
@@ -200,9 +220,10 @@ export async function generateAIReply(
         body: JSON.stringify({
           model,
           messages,
-          max_tokens: 512,
-          temperature: buyerIntent === 'strong_buy' ? 0.5 : buyerIntent === 'support' ? 0.2 : 0.35,
-          top_p: 0.9,
+          max_tokens: 350,      // Short = less room to hallucinate
+          temperature: 0.1,     // Very low = maximum factual accuracy
+          top_p: 0.85,
+          repetition_penalty: 1.1,
           stream: false,
         }),
       });
@@ -214,9 +235,16 @@ export async function generateAIReply(
 
       const data = await response.json();
       const reply = data?.choices?.[0]?.message?.content?.trim();
+
       if (!reply) throw new Error('Empty reply from model');
 
-      console.log(`✅ AI [${model.split('/')[1]}] intent:${buyerIntent} products:${retrievedProducts.length}`);
+      // ── Validate: did the model hallucinate? ──────────────────────────────
+      if (!validateResponse(reply, message)) {
+        console.warn(`⚠️ Hallucination detected in [${model.split('/')[1]}] response — using safe fallback`);
+        return getSafeFallback(message, buyerIntent);
+      }
+
+      console.log(`✅ AI [${model.split('/')[1]}] intent:${buyerIntent} len:${reply.length}`);
       return reply;
 
     } catch (err) {
@@ -225,5 +253,7 @@ export async function generateAIReply(
     }
   }
 
-  throw new Error(`All models failed. Last: ${lastError?.message}`);
+  // All models failed — use safe deterministic fallback
+  console.warn('⚠️ All models failed — using safe fallback');
+  return getSafeFallback(message, buyerIntent);
 }

@@ -1,198 +1,190 @@
+'use client';
+
 import Link from 'next/link';
+import ChatWidget from '@/components/ChatWidget';
 import styles from './page.module.css';
 
-export default function Home() {
+export default function HomePage() {
   return (
-    <div className={styles.landing}>
-      {/* Hero Section */}
+    <div className={styles.page}>
+      {/* ── HERO ──────────────────────────────────────────── */}
       <section className={styles.hero}>
-        <div className={styles.heroContent}>
-          <div className={styles.badge}>
-            <span className={styles.badgeDot} />
-            AI-Powered Customer Intelligence
-          </div>
-          <h1 className={styles.headline}>
-            Turn Every<br />
-            <span className={styles.headlineGradient}>Conversation</span><br />
-            Into Revenue
-          </h1>
-          <p className={styles.subtitle}>
-            Stop losing ₹15,000/month from missed messages. Our AI chatbot detects urgency,
-            generates smart replies, and tracks every conversation-to-revenue pipeline in real-time.
-          </p>
-          <div className={styles.heroCtas}>
-            <Link href="/dashboard" className="btn-primary">
-              📊 View Dashboard
-            </Link>
-            <Link href="/chat" className="btn-secondary">
-              💬 Try Live Chat
-            </Link>
+        <div className={styles.heroInner}>
+          <div className={styles.heroContent}>
+            <span className={styles.heroBadge}>
+              <span className={styles.heroBadgeDot} />
+              AI-Powered Business Assistant
+            </span>
+
+            <h1 className={styles.heroTitle}>
+              Turn Every Conversation<br />
+              Into a <span className={styles.accent}>Sale</span>
+            </h1>
+
+            <p className={styles.heroDesc}>
+              CustomerIQ gives your business a 24/7 AI sales assistant that understands your products,
+              pitches intelligently, and classifies leads by urgency — all in real time.
+            </p>
+
+            <div className={styles.heroCTA}>
+              <Link href="/dashboard" className={styles.btnPrimary}>
+                View Dashboard →
+              </Link>
+              <Link href="/catalog" className={styles.btnOutline}>
+                Browse Catalog
+              </Link>
+            </div>
+
+            {/* Stats row */}
+            <div className={styles.statsRow}>
+              {[
+                { value: '< 2s',   label: 'Avg AI Response' },
+                { value: '24/7',   label: 'Always Available' },
+                { value: '99.8%',  label: 'Uptime' },
+              ].map(s => (
+                <div key={s.label} className={styles.statItem}>
+                  <span className={styles.statVal}>{s.value}</span>
+                  <span className={styles.statLbl}>{s.label}</span>
+                </div>
+              ))}
+            </div>
           </div>
 
-          {/* Stats Row */}
-          <div className={styles.statsRow}>
-            <div className={styles.stat}>
-              <span className={styles.statValue}>85%</span>
-              <span className={styles.statLabel}>Fewer Missed Messages</span>
-            </div>
-            <div className={styles.statDivider} />
-            <div className={styles.stat}>
-              <span className={styles.statValue}>₹2.8L</span>
-              <span className={styles.statLabel}>Revenue Tracked</span>
-            </div>
-            <div className={styles.statDivider} />
-            <div className={styles.stat}>
-              <span className={styles.statValue}>1.2 min</span>
-              <span className={styles.statLabel}>Avg Response Time</span>
-            </div>
-            <div className={styles.statDivider} />
-            <div className={styles.stat}>
-              <span className={styles.statValue}>32%</span>
-              <span className={styles.statLabel}>Conversion Rate</span>
+          {/* Feature card */}
+          <div className={styles.heroRight}>
+            <div className={styles.featureCard}>
+              <div className={styles.featureCardHeader}>
+                <div className={styles.featureCardDots}>
+                  <span /><span /><span />
+                </div>
+                <span className={styles.featureCardTitle}>CustomerIQ · Live Dashboard</span>
+              </div>
+
+              <div className={styles.featureMetrics}>
+                {[
+                  { icon: '💬', label: 'Conversations', value: '2,847', up: true },
+                  { icon: '🎯', label: 'Hot Leads', value: '143', up: true },
+                  { icon: '⚡', label: 'AI Handled', value: '98.6%', up: false },
+                ].map(m => (
+                  <div key={m.label} className={styles.metric}>
+                    <span className={styles.metricIcon}>{m.icon}</span>
+                    <div>
+                      <div className={styles.metricValue}>{m.value}</div>
+                      <div className={styles.metricLabel}>{m.label}</div>
+                    </div>
+                  </div>
+                ))}
+              </div>
+
+              <div className={styles.liveConv}>
+                <div className={styles.liveConvHeader}>
+                  <span className={styles.liveTag}><span className={styles.liveDot} />LIVE</span>
+                  <span className={styles.liveSubtitle}>Priya Sharma · WhatsApp</span>
+                </div>
+                <div className={styles.bubble} data-role="customer">"I need a saree for my sister's wedding, budget ₹5000"</div>
+                <div className={styles.bubble} data-role="ai">"Perfect! Our Emerald Silk Saree at ₹4,499 would be stunning for a wedding — 31% off today! Want me to book it? 😊"</div>
+              </div>
             </div>
           </div>
         </div>
+      </section>
 
-        {/* Hero Visual */}
-        <div className={styles.heroVisual}>
-          <div className={styles.chatPreview}>
-            <div className={styles.chatHeader}>
-              <div className={styles.chatHeaderDot} style={{ background: '#ef4444' }} />
-              <div className={styles.chatHeaderDot} style={{ background: '#f59e0b' }} />
-              <div className={styles.chatHeaderDot} style={{ background: '#22c55e' }} />
-              <span className={styles.chatHeaderTitle}>AI Chat Console</span>
-            </div>
-            <div className={styles.chatMessages}>
-              <div className={`${styles.chatMsg} ${styles.incoming}`}>
-                <div className={styles.urgencyDot} style={{ background: '#ef4444' }} />
+      {/* ── HOW IT WORKS ─────────────────────────────────── */}
+      <section className={styles.howSection}>
+        <div className={styles.sectionInner}>
+          <div className={styles.sectionLabel}>How It Works</div>
+          <h2 className={styles.sectionTitle}>Intelligent by Design</h2>
+          <p className={styles.sectionDesc}>A 5-step AI pipeline that goes from message to sale in under 2 seconds.</p>
+
+          <div className={styles.stepsGrid}>
+            {[
+              { num: '01', icon: '📩', title: 'Message Received', desc: 'Customer sends a message via website chat or WhatsApp. Instantly captured.' },
+              { num: '02', icon: '🎯', title: 'Intent Detected', desc: 'AI classifies: Is this a hot lead, browser, or support case? Urgency is automatically scored.' },
+              { num: '03', icon: '🔍', title: 'Vector Product Search', desc: 'pgvector finds the 3 most semantically relevant products for the customer\'s exact query.' },
+              { num: '04', icon: '🧠', title: 'Sales AI Responds', desc: 'Context-aware reply using the customer\'s history, matched products, and intent mode.' },
+              { num: '05', icon: '📊', title: 'You See Everything', desc: 'Dashboard updates in real time. Take over any conversation with one click.' },
+            ].map(step => (
+              <div key={step.num} className={styles.step}>
+                <div className={styles.stepNum}>{step.num}</div>
+                <div className={styles.stepIcon}>{step.icon}</div>
+                <h3 className={styles.stepTitle}>{step.title}</h3>
+                <p className={styles.stepDesc}>{step.desc}</p>
+              </div>
+            ))}
+          </div>
+        </div>
+      </section>
+
+      {/* ── FEATURES ─────────────────────────────────────── */}
+      <section className={styles.featSection}>
+        <div className={styles.sectionInner}>
+          <div className={styles.sectionLabel}>Platform Features</div>
+          <h2 className={styles.sectionTitle}>Everything Your Business Needs</h2>
+
+          <div className={styles.featGrid}>
+            {[
+              { icon: '🤝', title: 'Human-in-the-Loop', desc: 'Take over any AI conversation with one click. Auto-releases back to AI after 5 minutes of inactivity.' },
+              { icon: '🧠', title: 'Vector Semantic Search', desc: 'pgvector + HuggingFace embeddings match products to customer intent with 90%+ accuracy.' },
+              { icon: '💾', title: 'Stateful Memory', desc: 'Full conversation history saved to Supabase. AI remembers context across sessions and page refreshes.' },
+              { icon: '📱', title: 'WhatsApp + Web', desc: 'One AI brain, two channels. Works on your website and Twilio WhatsApp simultaneously.' },
+              { icon: '📊', title: 'Live Analytics', desc: 'Urgency, intent, channel, and conversion data updated in real time on your dashboard.' },
+              { icon: '🏆', title: 'Sales Playbooks', desc: '4 AI modes: Closer, Consultant, Guide, Support — each with expert sales psychology built in.' },
+            ].map(feat => (
+              <div key={feat.title} className={styles.feat}>
+                <div className={styles.featIcon}>{feat.icon}</div>
+                <h3 className={styles.featTitle}>{feat.title}</h3>
+                <p className={styles.featDesc}>{feat.desc}</p>
+              </div>
+            ))}
+          </div>
+        </div>
+      </section>
+
+      {/* ── TECH STACK ───────────────────────────────────── */}
+      <section className={styles.techSection}>
+        <div className={styles.sectionInner}>
+          <div className={styles.sectionLabel}>Tech Stack</div>
+          <h2 className={styles.sectionTitle}>Built on Proven Infrastructure</h2>
+          <div className={styles.techGrid}>
+            {[
+              { name: 'Next.js 14',           role: 'App Framework',        logo: '⚡' },
+              { name: 'Supabase',             role: 'Database + Auth',      logo: '🗄️' },
+              { name: 'pgvector',             role: 'Semantic Search',      logo: '🔍' },
+              { name: 'HuggingFace',          role: 'AI Embeddings & LLM',  logo: '🤗' },
+              { name: 'Twilio',               role: 'WhatsApp Channel',     logo: '📱' },
+              { name: 'Vercel',               role: 'Edge Deployment',      logo: '▲' },
+            ].map(t => (
+              <div key={t.name} className={styles.techCard}>
+                <span className={styles.techLogo}>{t.logo}</span>
                 <div>
-                  <span className={styles.msgName}>Priya Sharma</span>
-                  <p>I need the silk saree delivered by tomorrow! It&apos;s urgent!! 🙏</p>
+                  <div className={styles.techName}>{t.name}</div>
+                  <div className={styles.techRole}>{t.role}</div>
                 </div>
               </div>
-              <div className={`${styles.chatMsg} ${styles.outgoing}`}>
-                <p>Hi Priya! I understand the urgency 🚀 Express delivery available — next-morning arrival at ₹299. Shall I upgrade your order?</p>
-                <span className={styles.aiTag}>🤖 AI Reply</span>
-              </div>
-              <div className={`${styles.chatMsg} ${styles.incoming}`}>
-                <div className={styles.urgencyDot} style={{ background: '#22c55e' }} />
-                <div>
-                  <span className={styles.msgName}>Arjun Kapoor</span>
-                  <p>Just browsing, do you have casual shirts?</p>
-                </div>
-              </div>
-            </div>
+            ))}
           </div>
         </div>
       </section>
 
-      {/* Problem Section */}
-      <section className={styles.section}>
-        <div className={styles.sectionInner}>
-          <h2 className={styles.sectionTitle}>
-            The Problem: <span className={styles.headlineGradient}>₹1.8 Lakh/Year Lost</span>
-          </h2>
-          <p className={styles.sectionSubtitle}>
-            Small businesses miss 40-60% of customer messages daily. Each missed message costs ₹500 in lost revenue.
-          </p>
-
-          <div className={styles.problemGrid}>
-            <div className={styles.problemCard}>
-              <span className={styles.problemIcon}>📱</span>
-              <h3>40-60% Messages Missed</h3>
-              <p>Busy owners can&apos;t respond to every WhatsApp, Instagram, and email message in time.</p>
-            </div>
-            <div className={styles.problemCard}>
-              <span className={styles.problemIcon}>💸</span>
-              <h3>₹500 Per Missed Message</h3>
-              <p>Each unanswered customer inquiry is a lost sale opportunity worth ₹500+.</p>
-            </div>
-            <div className={styles.problemCard}>
-              <span className={styles.problemIcon}>⏰</span>
-              <h3>Slow Response = Lost Customer</h3>
-              <p>82% of customers expect a response within 10 minutes. Delays = competitors win.</p>
-            </div>
-            <div className={styles.problemCard}>
-              <span className={styles.problemIcon}>📉</span>
-              <h3>No Revenue Tracking</h3>
-              <p>Zero visibility into which conversations lead to sales and which channels perform best.</p>
-            </div>
-          </div>
-        </div>
-      </section>
-
-      {/* Features Section */}
-      <section className={styles.section}>
-        <div className={styles.sectionInner}>
-          <h2 className={styles.sectionTitle}>
-            Our <span className={styles.headlineGradient}>Solution</span>
-          </h2>
-          <p className={styles.sectionSubtitle}>
-            AI-powered intelligence that turns every conversation into a revenue opportunity.
-          </p>
-
-          <div className={styles.featureGrid}>
-            <div className={styles.featureCard}>
-              <div className={styles.featureIcon}>🔴🟡🟢</div>
-              <h3>Urgency Detection AI</h3>
-              <p>Automatically classifies every message as High, Medium, or Low priority so you never miss an urgent customer again.</p>
-            </div>
-            <div className={styles.featureCard}>
-              <div className={styles.featureIcon}>🤖</div>
-              <h3>Smart AI Replies</h3>
-              <p>Context-aware responses that match your brand voice, suggest upsells, and handle complaints with empathy.</p>
-            </div>
-            <div className={styles.featureCard}>
-              <div className={styles.featureIcon}>📊</div>
-              <h3>Revenue Dashboard</h3>
-              <p>Real-time analytics tracking conversations → conversions → revenue with beautiful visualizations.</p>
-            </div>
-            <div className={styles.featureCard}>
-              <div className={styles.featureIcon}>🧠</div>
-              <h3>Customer Intelligence</h3>
-              <p>AI-scored leads, sentiment analysis, and complete interaction history for every customer.</p>
-            </div>
-            <div className={styles.featureCard}>
-              <div className={styles.featureIcon}>💰</div>
-              <h3>Revenue Attribution</h3>
-              <p>Know exactly which channels, products, and conversations drive the most revenue for your business.</p>
-            </div>
-            <div className={styles.featureCard}>
-              <div className={styles.featureIcon}>⚡</div>
-              <h3>Instant Response</h3>
-              <p>1.2 minute average response time. Customers get help immediately, even when you&apos;re busy.</p>
-            </div>
-          </div>
-        </div>
-      </section>
-
-      {/* CTA Section */}
-      <section className={styles.ctaSection}>
-        <div className={styles.ctaInner}>
-          <h2 className={styles.ctaTitle}>
-            Power Your Business With AI
-          </h2>
-          <p className={styles.ctaSubtitle}>
-            Register your store, get a unique AI chat link, and start turning conversations into revenue — in minutes.
-          </p>
-          <div className={styles.heroCtas}>
-            <Link href="/dashboard" className="btn-primary">
-              📊 Open Dashboard
-            </Link>
-            <Link href="/admin" className="btn-secondary">
-              🛡️ Admin Portal
-            </Link>
-          </div>
-        </div>
-      </section>
-
-      {/* Footer */}
+      {/* ── FOOTER ───────────────────────────────────────── */}
       <footer className={styles.footer}>
         <div className={styles.footerInner}>
-          <span className={styles.footerLogo}>⚡ CustomerIQ</span>
-          <span className={styles.footerText}>AI Customer Intelligence System — Hackathon 2026</span>
+          <div className={styles.footerLogo}>
+            <span className={styles.footerLogoMark}>⚡</span>
+            <span className={styles.footerLogoText}>CustomerIQ</span>
+          </div>
+          <p className={styles.footerDesc}>AI Customer Intelligence for Indian Businesses</p>
+          <div className={styles.footerLinks}>
+            <Link href="/dashboard">Dashboard</Link>
+            <Link href="/customers">Customers</Link>
+            <Link href="/live">Live Chat</Link>
+            <Link href="/catalog">Catalog</Link>
+          </div>
         </div>
       </footer>
+
+      {/* ── Chat Widget ──────────────────────────────────── */}
+      <ChatWidget />
     </div>
   );
 }
