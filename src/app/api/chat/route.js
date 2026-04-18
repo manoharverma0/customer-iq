@@ -50,7 +50,54 @@ export async function POST(request) {
     // 3. Use frontend-provided history (avoids extra DB round-trip)
     const history = conversationHistory || [];
 
-    // 4. Start AI generation immediately
+    // 4. Check if a human has taken over this conversation
+    //    We await dbPromise first so convId is set
+    await dbPromise;
+    let isHumanMode = false;
+    if (convId && supabase) {
+      const { data: convState } = await supabase
+        .from('conversations')
+        .select('ai_paused, human_last_replied_at')
+        .eq('id', convId)
+        .single();
+
+      if (convState?.ai_paused) {
+        // Auto-release if human hasn't replied in 5 min
+        const lastReply = convState.human_last_replied_at
+          ? new Date(convState.human_last_replied_at).getTime()
+          : 0;
+        const elapsed = Date.now() - lastReply;
+        if (elapsed > 5 * 60 * 1000) {
+          // Timeout expired — release back to AI automatically
+          await supabase.from('conversations')
+            .update({ ai_paused: false, taken_over_by: null })
+            .eq('id', convId);
+        } else {
+          isHumanMode = true;
+        }
+      }
+    }
+
+    // If human mode is ON, skip AI — reply with a holding message
+    if (isHumanMode) {
+      const holdingReply = '⏳ Our team has seen your message and will reply shortly! Please hold on. 🙏';
+      // Log analytics non-blocking
+      logAnalyticsEvent('chat_message', {
+        urgency, aiProvider: 'human-mode', messageLength: message.length, conversationId: convId,
+      }).catch(() => {});
+      return NextResponse.json({
+        reply: holdingReply,
+        urgency,
+        urgencyConfig,
+        conversationId: convId,
+        products: [],
+        responseType: 'text',
+        aiProvider: 'human-mode',
+        metadata: { processedAt: new Date().toISOString(), aiProvider: 'human-mode', messageLength: message.length },
+      });
+    }
+
+    // 5. Start AI generation
     let reply;
     let products = [];
     let responseType = 'text';
@@ -69,19 +116,13 @@ export async function POST(request) {
       aiProvider = 'smart-fallback';
     }
 
-    // 5. Wait for DB write to complete, then log analytics (non-blocking)
-    dbPromise.then(async () => {
-      try {
-        if (convId) {
-          await addMessage(convId, 'ai', reply, null, { urgency, aiProvider, hasProducts: products.length > 0 });
-        }
-        await logAnalyticsEvent('chat_message', {
-          urgency, aiProvider, responseType,
-          messageLength: message.length, conversationId: convId,
-          productsShown: products.length, requestStored,
-        });
-      } catch { /* non-critical */ }
-    });
+    // 6. Save AI reply + log analytics (non-blocking)
+    supabase && addMessage(convId, 'ai', reply, null, { urgency, aiProvider, hasProducts: products.length > 0 }).catch(() => {});
+    logAnalyticsEvent('chat_message', {
+      urgency, aiProvider, responseType,
+      messageLength: message.length, conversationId: convId,
+      productsShown: products.length, requestStored,
+    }).catch(() => {});
 
     return NextResponse.json({
       reply,
