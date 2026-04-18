@@ -21,7 +21,9 @@ CREATE TABLE IF NOT EXISTS products (
   image_url    TEXT,
   in_stock     BOOLEAN DEFAULT true,
   embedding    vector(384),      -- set by /api/seed-products
-  created_at   TIMESTAMPTZ DEFAULT NOW()
+  created_at   TIMESTAMPTZ DEFAULT NOW(),
+  -- UNIQUE constraint required for upsert (onConflict) to work
+  UNIQUE(name, business_id)
 );
 
 -- HNSW index for fast cosine similarity search

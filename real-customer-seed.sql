@@ -151,7 +151,7 @@ Your sister will be the star of the wedding! 💫 Feel free to message us anytim
    NOW() - INTERVAL '58 minutes');
 
   -- ── Log analytics event ───────────────────────────────────────────────────
-  INSERT INTO analytics_events (business_id, event_type, metadata, created_at)
+  INSERT INTO analytics_events (business_id, event_type, data, created_at)
   VALUES (
     v_business_id,
     'sale_completed',

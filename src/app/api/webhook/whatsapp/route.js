@@ -2,7 +2,7 @@ import { NextResponse } from 'next/server';
 import twilio from 'twilio';
 import { generateAIReply } from '@/lib/gemini';
 import { getSmartFallback } from '@/lib/smartFallback';
-import { detectUrgency, getUrgencyConfig } from '@/lib/urgencyDetector';
+import { detectUrgency, detectBuyerIntent, getUrgencyConfig } from '@/lib/urgencyDetector';
 import {
   supabase,
   getBusinessProfile,
@@ -60,7 +60,7 @@ async function getOrCreateWhatsAppConversation(businessId, fromNumber) {
 }
 
 /**
- * Load last 6 messages for conversation context.
+ * Load last 15 messages for conversation context (true stateful).
  */
 async function loadHistory(conversationId) {
   if (!supabase || !conversationId) return [];
@@ -69,8 +69,12 @@ async function loadHistory(conversationId) {
     .select('role, content')
     .eq('conversation_id', conversationId)
     .order('created_at', { ascending: false })
-    .limit(6);
-  return (data || []).reverse(); // chronological order
+    .limit(15);
+  // Map to AI format and reverse to chronological
+  return (data || []).reverse().map(m => ({
+    role: m.role === 'customer' ? 'user' : 'assistant',
+    content: m.content,
+  }));
 }
 
 // ─── TwiML helper ─────────────────────────────────────────────────────────────
@@ -141,13 +145,16 @@ export async function POST(request) {
 
     console.log(`📨 WhatsApp inbound | from: ${fromNum} | msg: "${message.slice(0, 80)}"`);
 
-    // ── 1. Load business + detect urgency (parallel) ──────────────────────────
-    const [business, urgency] = await Promise.all([
+    // ── 1. Load business + detect urgency + detect buyer intent (parallel) ─────
+    const [business, urgency, buyerIntent] = await Promise.all([
       getDemoBusiness(),
       Promise.resolve(detectUrgency(message)),
+      Promise.resolve(detectBuyerIntent(message)),
     ]);
     const businessId   = business?.id || null;
     const systemPrompt = business?.system_prompt || null;
+
+    console.log(`🎯 Urgency: ${urgency} | Intent: ${buyerIntent} | from: ${fromNum}`);
 
     // ── 2. Get/create conversation + load history (parallel) ──────────────────
     const [conversationId, history] = await Promise.all([
@@ -158,22 +165,45 @@ export async function POST(request) {
     // Load history if we have a conversation
     const contextHistory = conversationId ? await loadHistory(conversationId) : [];
 
-    // ── 3. Save incoming message (non-blocking) ────────────────────────────────
+    // ── 3. Update conversation urgency in DB ──────────────────────────────────
+    // THIS is the fix — urgency must be persisted to conversations table
+    // so the dashboard and customers page show it correctly
+    if (conversationId && supabase) {
+      await supabase
+        .from('conversations')
+        .update({
+          urgency,
+          updated_at: new Date().toISOString(),
+        })
+        .eq('id', conversationId)
+        .then(() => console.log(`✅ Urgency '${urgency}' saved to conversation ${conversationId}`))
+        .catch(e => console.warn('⚠️ Could not update urgency:', e.message));
+    }
+
+    // ── 4. Save incoming message (non-blocking) ────────────────────────────────
     const saveIncoming = conversationId
       ? addMessage(conversationId, 'customer', message, urgency, {
           channel: 'whatsapp',
           from: fromNum,
           urgency,
+          buyerIntent,
         }).catch(e => console.warn('⚠️  Save incoming failed:', e.message))
       : Promise.resolve();
 
-    // ── 4. Generate AI reply ──────────────────────────────────────────────────
+    // ── 5. Generate AI reply (with buyer intent for sales mode) ───────────────
     let reply = '';
     let aiProvider = 'huggingface';
 
     try {
-      reply = await generateAIReply(message, contextHistory, systemPrompt);
-      console.log(`✅ AI replied via HuggingFace (${reply.length} chars)`);
+      reply = await generateAIReply(
+        message,
+        contextHistory,
+        systemPrompt,
+        [],              // no vector search on WhatsApp for now (no embedding step)
+        business?.name || 'StyleCraft India',
+        buyerIntent      // 🔑 sales mode trigger
+      );
+      console.log(`✅ AI replied via HuggingFace (${reply.length} chars) | intent: ${buyerIntent}`);
     } catch (aiError) {
       console.warn('⚠️  HuggingFace unavailable, using smart fallback:', aiError.message?.slice(0, 80));
       const fb = await getSmartFallback(message, conversationId);

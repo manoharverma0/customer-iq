@@ -8,13 +8,15 @@ export async function GET() {
   try {
     if (!supabase) return NextResponse.json({ conversations: [] });
 
-    // Auto-release any conversations where human timed out (> 5 min no reply)
+    // Auto-release any conversations where human timed out:
+    // - human_last_replied_at < 5 min ago, OR
+    // - human_last_replied_at IS NULL (took over but never replied — still release after timeout)
     const timeout = new Date(Date.now() - HUMAN_TIMEOUT_MS).toISOString();
     await supabase
       .from('conversations')
       .update({ ai_paused: false, taken_over_by: null })
       .eq('ai_paused', true)
-      .lt('human_last_replied_at', timeout);
+      .or(`human_last_replied_at.is.null,human_last_replied_at.lt.${timeout}`);
 
     // Fetch all recent conversations
     const { data, error } = await supabase

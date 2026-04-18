@@ -59,7 +59,7 @@ async function fetchProducts(category, limit = 3) {
     if (category) {
       query = query.eq('category', category);
     }
-    query = query.order('rating', { ascending: false }).limit(limit);
+    query = query.limit(limit);
     const { data, error } = await query;
     if (error) { console.error('Fetch products error:', error); return []; }
     return data || [];

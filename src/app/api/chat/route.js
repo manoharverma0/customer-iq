@@ -1,7 +1,7 @@
 import { NextResponse } from 'next/server';
 import { generateAIReply } from '@/lib/gemini';
 import { generateEmbedding } from '@/lib/embeddings';
-import { detectUrgency, getUrgencyConfig } from '@/lib/urgencyDetector';
+import { detectUrgency, detectBuyerIntent, getUrgencyConfig } from '@/lib/urgencyDetector';
 import { getSmartFallback } from '@/lib/smartFallback';
 import {
   createConversation,
@@ -30,6 +30,7 @@ export async function POST(request) {
 
     const urgency = detectUrgency(message);
     const urgencyConfig = getUrgencyConfig(urgency);
+    const buyerIntent = detectBuyerIntent(message);
 
     // ── STEP 1: Load business from DB (not hardcoded) ──────────────────────
     // businessId from URL param takes priority; fallback to demo business
@@ -73,7 +74,15 @@ export async function POST(request) {
     if (convId) {
       addMessage(convId, 'customer', message, urgency, {
         detectedIntents: detectIntents(message),
+        buyerIntent,
       }).catch(() => {});
+
+      // ✔ Persist urgency to conversations table so dashboard shows it correctly
+      supabase?.from('conversations')
+        .update({ urgency, updated_at: new Date().toISOString() })
+        .eq('id', convId)
+        .then(() => {})
+        .catch(() => {});
     }
 
     // ── STEP 3: Check if human has taken over ─────────────────────────────
@@ -135,7 +144,8 @@ export async function POST(request) {
             history,
             business?.system_prompt || null,
             retrievedProducts,
-            business?.name || 'StyleCraft India'
+            business?.name || 'StyleCraft India',
+            buyerIntent   // 🔑 sales mode: strong_buy | soft_buy | browse | support
           );
         } catch (aiError) {
           console.warn('AI unavailable, using smart fallback:', aiError.message?.slice(0, 80));

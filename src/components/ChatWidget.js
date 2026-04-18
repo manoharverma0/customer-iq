@@ -16,7 +16,18 @@ export default function ChatWidget() {
   // Restore session from localStorage on mount
   useEffect(() => {
     const savedConvId = localStorage.getItem('ciq_conv_id');
-    if (savedConvId) setConversationId(savedConvId);
+    if (savedConvId) {
+      setConversationId(savedConvId);
+      // Restore messages from DB so UI shows history after page refresh (Bug 4 fix)
+      fetch(`/api/history?id=${savedConvId}`)
+        .then(r => r.json())
+        .then(data => {
+          if (data.messages && data.messages.length > 0) {
+            setMessages(data.messages);
+          }
+        })
+        .catch(() => {}); // Silently fail — welcome message will show instead
+    }
   }, []);
 
   useEffect(() => {
