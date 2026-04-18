@@ -206,9 +206,16 @@ Always end your response with a question or next step to keep the conversation g
 export async function GET(request) {
   const { searchParams } = new URL(request.url);
   const id = searchParams.get('id');
+  const email = searchParams.get('email');
 
   if (id) {
     const { data, error } = await supabase.from('businesses').select('*').eq('id', id).single();
+    if (error) return NextResponse.json({ error: error.message }, { status: 404 });
+    return NextResponse.json(data);
+  }
+
+  if (email) {
+    const { data, error } = await supabase.from('businesses').select('*').eq('owner_email', email).single();
     if (error) return NextResponse.json({ error: error.message }, { status: 404 });
     return NextResponse.json(data);
   }

@@ -9,6 +9,10 @@ import {
   XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Legend
 } from 'recharts';
 
+// Demo business — StyleCraft India (hardcoded for single-business mode)
+const DEMO_BUSINESS_NAME = 'StyleCraft India';
+const DEMO_BUSINESS_EMAIL = 'admin@stylecraft.com';
+
 const CustomTooltip = ({ active, payload, label }) => {
   if (active && payload && payload.length) {
     return (
@@ -31,24 +35,26 @@ export default function DashboardPage() {
   const router = useRouter();
   const [data, setData] = useState(null);
   const [loading, setLoading] = useState(true);
-  const [businessName, setBusinessName] = useState('');
+  const [businessId, setBusinessId] = useState(null);
 
   useEffect(() => {
-    const activeBusinessId = localStorage.getItem('active_business_id');
-    const name = localStorage.getItem('business_name');
-
-    // Auth guard — must be logged in
-    if (!activeBusinessId) {
-      router.push('/login');
-      return;
-    }
-
-    setBusinessName(name || 'Your Business');
-
-    fetch(`/api/analytics?businessId=${activeBusinessId}`)
+    // Fetch the demo business ID by email, then load analytics
+    fetch(`/api/businesses?email=${DEMO_BUSINESS_EMAIL}`)
+      .then(res => res.json())
+      .then(biz => {
+        const id = biz?.id || null;
+        setBusinessId(id);
+        return fetch(`/api/analytics${id ? `?businessId=${id}` : ''}`);
+      })
       .then(res => res.json())
       .then(d => { setData(d); setLoading(false); })
-      .catch(() => setLoading(false));
+      .catch(() => {
+        // Fallback: load analytics without businessId (uses seed data)
+        fetch('/api/analytics')
+          .then(res => res.json())
+          .then(d => { setData(d); setLoading(false); })
+          .catch(() => setLoading(false));
+      });
   }, []);
 
   if (loading) {
@@ -71,7 +77,7 @@ export default function DashboardPage() {
         {/* Header */}
         <div className={styles.header}>
           <div>
-            <h1 className={styles.title}>{businessName} Dashboard</h1>
+            <h1 className={styles.title}>{DEMO_BUSINESS_NAME} Dashboard</h1>
             <p className={styles.subtitle}>Real-time analytics & revenue intelligence</p>
           </div>
           <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
@@ -80,16 +86,16 @@ export default function DashboardPage() {
               Live Data
             </div>
             <button
-              onClick={() => { localStorage.clear(); router.push('/login'); }}
+              onClick={() => router.push('/admin')}
               style={{
                 background: 'transparent', border: '1px solid rgba(255,255,255,0.1)',
                 color: 'var(--text-secondary)', padding: '8px 16px', borderRadius: '8px',
                 cursor: 'pointer', fontSize: '0.85rem', transition: 'all 0.2s'
               }}
-              onMouseOver={e => e.target.style.color = '#ef4444'}
+              onMouseOver={e => e.target.style.color = '#a5b4fc'}
               onMouseOut={e => e.target.style.color = 'var(--text-secondary)'}
             >
-              Sign Out
+              🛡️ Admin
             </button>
           </div>
         </div>
@@ -102,18 +108,18 @@ export default function DashboardPage() {
         }}>
           <span style={{ fontSize: '1.1rem' }}>🔗</span>
           <span style={{ color: 'var(--text-secondary)', fontSize: '0.9rem', fontWeight: 500 }}>
-            Your customer chat link:
+            Customer chat link:
           </span>
           <code style={{
             flex: 1, background: 'rgba(0,0,0,0.3)', padding: '6px 12px', borderRadius: '6px',
             fontSize: '0.85rem', color: '#a5b4fc', fontFamily: 'monospace', wordBreak: 'break-all'
           }}>
-            {typeof window !== 'undefined' ? `${window.location.origin}/chat/${localStorage.getItem('active_business_id')}` : ''}
+            {typeof window !== 'undefined' ? `${window.location.origin}/chat${businessId ? `/${businessId}` : ''}` : '/chat'}
           </code>
           <button
             onClick={() => {
-              const id = localStorage.getItem('active_business_id');
-              navigator.clipboard.writeText(`${window.location.origin}/chat/${id}`);
+              const url = `${window.location.origin}/chat${businessId ? `/${businessId}` : ''}`;
+              navigator.clipboard.writeText(url);
               alert('Chat link copied!');
             }}
             style={{
@@ -125,7 +131,7 @@ export default function DashboardPage() {
             Copy
           </button>
           <button
-            onClick={() => router.push(`/chat/${localStorage.getItem('active_business_id')}`)}
+            onClick={() => router.push(`/chat${businessId ? `/${businessId}` : ''}`)}
             style={{
               background: 'linear-gradient(135deg, #6366f1, #a855f7)', border: 'none',
               color: 'white', padding: '6px 14px', borderRadius: '6px',
@@ -134,6 +140,86 @@ export default function DashboardPage() {
           >
             Test Chat →
           </button>
+        </div>
+
+        {/* WhatsApp / Twilio Integration Card */}
+        <div style={{
+          display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '16px',
+          marginBottom: '24px'
+        }}>
+          {/* WhatsApp Channel */}
+          <div style={{
+            background: 'rgba(37,211,102,0.06)', border: '1px solid rgba(37,211,102,0.2)',
+            borderRadius: '12px', padding: '16px 20px', display: 'flex', flexDirection: 'column', gap: '10px'
+          }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+              <span style={{ fontSize: '1.3rem' }}>📱</span>
+              <span style={{ fontWeight: 700, color: '#25d366', fontSize: '1rem' }}>WhatsApp Channel</span>
+              <span style={{
+                marginLeft: 'auto', background: 'rgba(37,211,102,0.15)',
+                color: '#25d366', padding: '2px 10px', borderRadius: '20px', fontSize: '0.75rem', fontWeight: 600
+              }}>LIVE via Twilio</span>
+            </div>
+            <div style={{ fontSize: '0.83rem', color: 'var(--text-secondary)' }}>
+              Webhook endpoint — paste this in Twilio Console:
+            </div>
+            <code style={{
+              background: 'rgba(0,0,0,0.35)', padding: '7px 12px', borderRadius: '7px',
+              fontSize: '0.78rem', color: '#86efac', fontFamily: 'monospace', wordBreak: 'break-all'
+            }}>
+              {typeof window !== 'undefined' ? `${window.location.origin}/api/webhook/whatsapp` : '/api/webhook/whatsapp'}
+            </code>
+            <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
+              <button
+                onClick={() => {
+                  const url = `${window.location.origin}/api/webhook/whatsapp`;
+                  navigator.clipboard.writeText(url);
+                  alert('Webhook URL copied!');
+                }}
+                style={{
+                  background: 'rgba(37,211,102,0.15)', border: '1px solid rgba(37,211,102,0.3)',
+                  color: '#25d366', padding: '5px 14px', borderRadius: '6px',
+                  cursor: 'pointer', fontSize: '0.8rem', fontWeight: 600
+                }}
+              >
+                Copy Webhook URL
+              </button>
+            </div>
+          </div>
+
+          {/* Twilio Sandbox Setup */}
+          <div style={{
+            background: 'rgba(99,102,241,0.06)', border: '1px solid rgba(99,102,241,0.2)',
+            borderRadius: '12px', padding: '16px 20px', display: 'flex', flexDirection: 'column', gap: '10px'
+          }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+              <span style={{ fontSize: '1.3rem' }}>🔧</span>
+              <span style={{ fontWeight: 700, color: '#a5b4fc', fontSize: '1rem' }}>Twilio Setup</span>
+            </div>
+            <div style={{ fontSize: '0.83rem', color: 'var(--text-secondary)', lineHeight: 1.6 }}>
+              <strong style={{ color: 'var(--text-primary)' }}>1.</strong> Go to{' '}
+              <a href="https://console.twilio.com" target="_blank" rel="noreferrer"
+                style={{ color: '#a5b4fc' }}>console.twilio.com</a>{' '}
+              → Messaging → Try it out → WhatsApp Sandbox<br />
+              <strong style={{ color: 'var(--text-primary)' }}>2.</strong> Set the webhook URL above in <em>When a message comes in</em><br />
+              <strong style={{ color: 'var(--text-primary)' }}>3.</strong> Customer texts the sandbox number to join<br />
+              <strong style={{ color: 'var(--text-primary)' }}>4.</strong> Add <code style={{ color: '#a5b4fc', background: 'rgba(0,0,0,0.2)', padding: '1px 5px', borderRadius: '3px' }}>TWILIO_AUTH_TOKEN</code> to .env.local
+            </div>
+            <div style={{ display: 'flex', gap: '8px', marginTop: 'auto' }}>
+              <a
+                href="https://console.twilio.com/us1/develop/sms/try-it-out/whatsapp-learn"
+                target="_blank" rel="noreferrer"
+                style={{
+                  background: 'rgba(99,102,241,0.15)', border: '1px solid rgba(99,102,241,0.3)',
+                  color: '#a5b4fc', padding: '5px 14px', borderRadius: '6px',
+                  cursor: 'pointer', fontSize: '0.8rem', fontWeight: 600, textDecoration: 'none',
+                  display: 'inline-flex', alignItems: 'center'
+                }}
+              >
+                Open Twilio Sandbox ↗
+              </a>
+            </div>
+          </div>
         </div>
 
         {/* Metric Cards */}

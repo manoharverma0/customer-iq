@@ -21,11 +21,11 @@ export default function Home() {
             generates smart replies, and tracks every conversation-to-revenue pipeline in real-time.
           </p>
           <div className={styles.heroCtas}>
-            <Link href="/onboarding" className="btn-primary">
-              🚀 Get Started Free
-            </Link>
-            <Link href="/dashboard" className="btn-secondary">
+            <Link href="/dashboard" className="btn-primary">
               📊 View Dashboard
+            </Link>
+            <Link href="/chat" className="btn-secondary">
+              💬 Try Live Chat
             </Link>
           </div>
 
@@ -176,8 +176,8 @@ export default function Home() {
             Register your store, get a unique AI chat link, and start turning conversations into revenue — in minutes.
           </p>
           <div className={styles.heroCtas}>
-            <Link href="/onboarding" className="btn-primary">
-              🚀 Register Your Store
+            <Link href="/dashboard" className="btn-primary">
+              📊 Open Dashboard
             </Link>
             <Link href="/admin" className="btn-secondary">
               🛡️ Admin Portal
