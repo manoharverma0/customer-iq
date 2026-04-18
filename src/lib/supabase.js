@@ -119,10 +119,6 @@ export async function getAnalyticsSummary(businessId) {
     
   if (businessId) convQuery = convQuery.eq('business_id', businessId);
   const { data: conversations } = await convQuery;
-
-  // We need to count messages by business ID, but messages don't have business_id directly.
-  // We can join conversations or just get the count for now.
-  // Actually, we can just omit message count for business level, or calculate it.
   
   if (!conversations) return null;
 
@@ -136,8 +132,86 @@ export async function getAnalyticsSummary(businessId) {
 
   return {
     totalConversations,
-    totalMessages: 0, // Mock for now at business level
+    totalMessages: 0,
     totalRevenue,
     urgencyBreakdown,
   };
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// NEW: Stateful Conversation History
+// ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * Load the full message history for a conversation from Supabase.
+ * Returns messages formatted for AI consumption: [{role, content}]
+ * This enables TRUE stateful conversations — even after page refresh.
+ */
+export async function getConversationHistory(conversationId, limit = 20) {
+  if (!supabase || !conversationId) return [];
+  const { data, error } = await supabase
+    .from('messages')
+    .select('role, content, created_at')
+    .eq('conversation_id', conversationId)
+    .order('created_at', { ascending: true })
+    .limit(limit);
+  if (error) { console.error('Get history error:', error); return []; }
+  return (data || []).map(m => ({
+    role: m.role === 'customer' ? 'user' : 'assistant',
+    content: m.content,
+  }));
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// NEW: Vector Search (pgvector RAG)
+// ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * Semantic product search using pgvector cosine similarity.
+ * Requires the match_products() SQL function and embeddings to be seeded.
+ * Returns top-k products most semantically similar to the query embedding.
+ */
+export async function vectorSearchProducts(queryEmbedding, businessId, limit = 3) {
+  if (!supabase || !queryEmbedding || !businessId) return [];
+  try {
+    const { data, error } = await supabase.rpc('match_products', {
+      query_embedding: queryEmbedding,
+      business_id_filter: businessId,
+      match_count: limit,
+      similarity_threshold: 0.25,
+    });
+    if (error) { console.warn('Vector search error:', error.message); return []; }
+    return data || [];
+  } catch (err) {
+    console.warn('Vector search failed:', err.message);
+    return [];
+  }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// NEW: Demo Business from DB (cached, not hardcoded)
+// ─────────────────────────────────────────────────────────────────────────────
+
+let _cachedBusiness = null;
+let _cacheExpiry = 0;
+const CACHE_TTL = 5 * 60 * 1000; // 5 minutes
+
+/**
+ * Load StyleCraft India from Supabase businesses table.
+ * Cached in-memory for 5 minutes to avoid repeated DB calls.
+ * Falls back to null if DB is unavailable.
+ */
+export async function getDemoBusiness() {
+  if (_cachedBusiness && Date.now() < _cacheExpiry) return _cachedBusiness;
+  if (!supabase) return null;
+  const { data } = await supabase
+    .from('businesses')
+    .select('id, name, owner_email, system_prompt, welcome_message')
+    .eq('owner_email', 'admin@stylecraft.com')
+    .single();
+  if (data) {
+    _cachedBusiness = data;
+    _cacheExpiry = Date.now() + CACHE_TTL;
+  }
+  return data || null;
 }

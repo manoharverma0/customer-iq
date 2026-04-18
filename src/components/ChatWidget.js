@@ -13,6 +13,12 @@ export default function ChatWidget() {
   const messagesEndRef = useRef(null);
   const inputRef = useRef(null);
 
+  // Restore session from localStorage on mount
+  useEffect(() => {
+    const savedConvId = localStorage.getItem('ciq_conv_id');
+    if (savedConvId) setConversationId(savedConvId);
+  }, []);
+
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [messages, isTyping]);
@@ -68,6 +74,8 @@ export default function ChatWidget() {
 
       if (data.conversationId && !conversationId) {
         setConversationId(data.conversationId);
+        // Persist so conversation survives page refresh
+        localStorage.setItem('ciq_conv_id', data.conversationId);
       }
 
       const aiMessage = {

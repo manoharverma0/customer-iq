@@ -1,120 +1,123 @@
-// ─── StyleCraft Anti-Hallucination Guardrail ─────────────────────────────────
-// This is injected into EVERY message sent to the AI.
-// It overrides the model's general knowledge and locks it to StyleCraft India only.
-const STYLECRAFT_GUARDRAIL = `
-⚠️ ABSOLUTE CONSTRAINT — READ BEFORE ANSWERING:
-You are the AI assistant EXCLUSIVELY for "StyleCraft India", a fashion & ethnic wear brand.
+// AI Reply Generation — HuggingFace Inference API
+// Business context and product data come from Supabase (not hardcoded here)
 
-YOU MUST ONLY DISCUSS:
-- Silk Sarees (₹2,999 – ₹15,999)
-- Designer Kurtas (₹899 – ₹2,999)
-- Lehengas (₹5,999 – ₹25,999)
-- Jewelry Sets (₹1,499 – ₹8,999)
-- Casual Shirts (₹699 – ₹1,999)
-- Our shipping, returns, discounts, and size guide
+const HF_API_BASE = 'https://api-inference.huggingface.co/models';
 
-YOU MUST NEVER:
-- Give prices or info for products NOT in the above list (bikes, electronics, food, cars, etc.)
-- Make up products, prices, or policies not listed above
-- Act as a general assistant or answer unrelated questions
-- Discuss competitors or other brands
-
-If asked about ANYTHING outside our catalog, respond ONLY:
-"I'm StyleCraft India's fashion assistant! I can only help with our ethnic wear — sarees, kurtas, lehengas, jewelry, or shirts. What can I help you with? 😊"
-
-CUSTOMER MESSAGE:
-`.trim();
-
-const HF_API_URL = 'https://router.huggingface.co/v1/chat/completions';
-
-// Fast models prioritized — small & responsive on free HF tier
-// Ordered: fastest first, quality fallbacks after
-const MODEL_FALLBACKS = [
-  'Qwen/Qwen2.5-7B-Instruct',           // Fast, excellent quality, ~3-5s
-  'google/gemma-3-4b-it',               // Google's fast small model, ~4-6s
-  'mistralai/Mistral-7B-Instruct-v0.3', // Reliable fallback, ~5-8s
-  'google/gemma-3-12b-it',              // Larger fallback if all above fail
+// Model waterfall: try each in order until one responds
+const MODELS = [
+  'Qwen/Qwen2.5-72B-Instruct',
+  'mistralai/Mistral-7B-Instruct-v0.3',
+  'HuggingFaceH4/zephyr-7b-beta',
 ];
 
-export async function generateAIReply(message, conversationHistory = [], systemPrompt) {
-  const hfToken = process.env.HF_TOKEN;
-  if (!hfToken) {
-    throw new Error('HF_TOKEN not configured — get a free token from https://huggingface.co/settings/tokens');
+/**
+ * Build the full system prompt from DB data + vector-retrieved products.
+ *
+ * @param {string|null} dbSystemPrompt  - business.system_prompt from Supabase
+ * @param {Array}       retrievedProducts - from vectorSearchProducts()
+ * @param {string|null} businessName    - business.name from Supabase
+ */
+function buildSystemPrompt(dbSystemPrompt, retrievedProducts = [], businessName = 'StyleCraft India') {
+  // ── Base: use DB system_prompt if available ────────────────────────────────
+  const base = dbSystemPrompt || `
+You are a helpful AI assistant for ${businessName}.
+Be warm, professional, and only discuss products and services from ${businessName}.
+Never discuss unrelated topics like vehicles, electronics, food, etc.
+  `.trim();
+
+  // ── Inject vector-retrieved products into prompt ───────────────────────────
+  let productContext = '';
+  if (retrievedProducts && retrievedProducts.length > 0) {
+    productContext = `
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+MOST RELEVANT PRODUCTS FOR THIS QUERY (from semantic search):
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+${retrievedProducts.map((p, i) => `
+${i + 1}. ${p.name}
+   Category: ${p.category} | Price: ₹${p.price?.toLocaleString('en-IN')}${p.original_price ? ` (was ₹${p.original_price?.toLocaleString('en-IN')})` : ''}${p.discount > 0 ? ` | ${p.discount}% OFF` : ''}
+   Description: ${p.description}
+   Tags: ${p.tags?.join(', ')}
+   Sizes: ${p.sizes?.join(', ')}
+   Image: ${p.image_url || 'available in catalog'}
+   Similarity: ${((p.similarity || 0) * 100).toFixed(0)}% match
+`).join('')}
+Use the above products to answer the customer's query with specific prices, descriptions and details.
+ONLY mention products from this list or your general catalog — NEVER invent new ones.
+If none of the above perfectly match, use your catalog knowledge to suggest the closest product.
+`;
   }
 
-  // Always prepend the guardrail to the system prompt.
-  // If a DB system_prompt exists, merge it AFTER the guardrail so the guardrail wins.
-  const baseGuardrail = `You are StyleCraft India's AI customer service assistant.\n\n${STYLECRAFT_GUARDRAIL}\n\n`;
-  const sysPrompt = systemPrompt
-    ? `${baseGuardrail}\n---\nADDITIONAL BUSINESS CONTEXT:\n${systemPrompt}`
-    : baseGuardrail;
+  return base + productContext;
+}
 
-  // Build conversation messages in OpenAI chat format
+/**
+ * Generate an AI reply using HuggingFace Inference API.
+ *
+ * @param {string} message              - Customer's latest message
+ * @param {Array}  conversationHistory  - [{role:'user'|'assistant', content:string}] from DB
+ * @param {string|null} dbSystemPrompt  - From businesses.system_prompt in Supabase
+ * @param {Array}  retrievedProducts    - From vectorSearchProducts() (pgvector RAG)
+ * @param {string|null} businessName    - From businesses.name in Supabase
+ */
+export async function generateAIReply(
+  message,
+  conversationHistory = [],
+  dbSystemPrompt = null,
+  retrievedProducts = [],
+  businessName = 'StyleCraft India'
+) {
+  const hfToken = process.env.HF_TOKEN;
+  if (!hfToken) throw new Error('HF_TOKEN not set');
+
+  const systemPrompt = buildSystemPrompt(dbSystemPrompt, retrievedProducts, businessName);
+
+  // Build chat messages array for conversational models
   const messages = [
-    { role: 'system', content: sysPrompt },
+    { role: 'system', content: systemPrompt },
+    // Include last 15 messages of history (true stateful context)
+    ...conversationHistory.slice(-15),
+    { role: 'user', content: message },
   ];
 
-  // Add conversation history (last 6 messages for context)
-  const recentHistory = conversationHistory.slice(-6);
-  for (const msg of recentHistory) {
-    messages.push({
-      role: msg.role === 'customer' ? 'user' : 'assistant',
-      content: msg.content,
-    });
-  }
+  let lastError;
 
-  // Add the current message — prefix with guardrail so model reads constraint RIGHT before the question
-  messages.push({ role: 'user', content: `${STYLECRAFT_GUARDRAIL}\n\n${message}` });
-
-  // Try each model until one works
-  let lastError = null;
-  for (const modelName of MODEL_FALLBACKS) {
+  for (const model of MODELS) {
     try {
-      const response = await fetch(HF_API_URL, {
+      const response = await fetch(`${HF_API_BASE}/${model}/v1/chat/completions`, {
         method: 'POST',
         headers: {
           'Authorization': `Bearer ${hfToken}`,
           'Content-Type': 'application/json',
         },
         body: JSON.stringify({
-          model: modelName,
+          model,
           messages,
-          max_tokens: 300,
-          temperature: 0.3,  // Lower = less hallucination, more grounded
-          top_p: 0.85,
+          max_tokens: 512,
+          temperature: 0.3,      // Low = more focused, less hallucination
+          top_p: 0.9,
           stream: false,
         }),
       });
 
       if (!response.ok) {
-        const errorBody = await response.text();
-        const status = response.status;
-
-        // Rate limited or model loading — try next model
-        if (status === 429 || status === 503 || status === 500) {
-          console.warn(`⚠ Model ${modelName} returned ${status}, trying next...`);
-          lastError = new Error(`${modelName} returned ${status}`);
-          continue;
-        }
-
-        throw new Error(`HF API error ${status}: ${errorBody.slice(0, 200)}`);
+        const errText = await response.text();
+        throw new Error(`${response.status}: ${errText.slice(0, 120)}`);
       }
 
       const data = await response.json();
-      const text = data.choices?.[0]?.message?.content;
+      const reply = data?.choices?.[0]?.message?.content?.trim();
 
-      if (text) {
-        console.log(`✅ Gemma reply via ${modelName} (${text.length} chars)`);
-        return text;
-      }
+      if (!reply) throw new Error('Empty reply from model');
 
-      lastError = new Error(`Empty response from ${modelName}`);
-    } catch (error) {
-      lastError = error;
-      console.warn(`⚠ Model ${modelName} failed:`, error.message?.slice(0, 120));
-      continue;
+      console.log(`✅ AI replied via ${model} | products_used: ${retrievedProducts.length}`);
+      return reply;
+
+    } catch (err) {
+      lastError = err;
+      console.warn(`❌ Model ${model} failed:`, err.message?.slice(0, 80));
     }
   }
 
-  throw lastError || new Error('All HuggingFace models failed');
+  throw new Error(`All models failed. Last: ${lastError?.message}`);
 }
