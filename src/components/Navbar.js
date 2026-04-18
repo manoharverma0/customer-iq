@@ -18,7 +18,6 @@ export default function Navbar() {
 
   const links = [
     { href: '/', label: 'Home', icon: '🏠' },
-    { href: '/login', label: 'Login', icon: '🔑' },
     { href: '/dashboard', label: 'Dashboard', icon: '📊' },
     { href: '/customers', label: 'Customers', icon: '👥' },
   ];
