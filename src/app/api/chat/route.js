@@ -70,28 +70,30 @@ export async function POST(request) {
       }
     }
 
-    // Save customer message to DB immediately
-    if (convId) {
+    // ── STEP 3: Smart Urgency Upgrade & Human Takeover Check ───────────────
+    if (convId && supabase) {
+      const { data: convState } = await supabase
+        .from('conversations')
+        .select('urgency, ai_paused, human_last_replied_at')
+        .eq('id', convId)
+        .single();
+
+      // Smart Urgency logic: never downgrade urgency, only escalate
+      const weight = { low: 1, medium: 2, high: 3 };
+      const currentWeight = weight[convState?.urgency] || 0;
+      const newWeight = weight[urgency] || 1;
+      const finalUrgency = newWeight > currentWeight ? urgency : convState?.urgency || urgency;
+
+      // Save customer message to DB immediately
       addMessage(convId, 'customer', message, urgency, {
         detectedIntents: detectIntents(message),
         buyerIntent,
       }).catch(() => {});
 
-      // ✔ Persist urgency to conversations table so dashboard shows it correctly
-      supabase?.from('conversations')
-        .update({ urgency, updated_at: new Date().toISOString() })
-        .eq('id', convId)
-        .then(() => {})
-        .catch(() => {});
-    }
-
-    // ── STEP 3: Check if human has taken over ─────────────────────────────
-    if (convId && supabase) {
-      const { data: convState } = await supabase
-        .from('conversations')
-        .select('ai_paused, human_last_replied_at')
-        .eq('id', convId)
-        .single();
+      // Persist the MAX urgency to the overall conversation
+      await supabase.from('conversations')
+        .update({ urgency: finalUrgency, updated_at: new Date().toISOString() })
+        .eq('id', convId);
 
       if (convState?.ai_paused) {
         const lastReply = convState.human_last_replied_at

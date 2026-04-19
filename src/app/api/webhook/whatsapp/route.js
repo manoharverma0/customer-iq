@@ -176,17 +176,22 @@ export async function POST(request) {
     const contextHistory = conversationId ? await loadHistory(conversationId) : [];
 
     // ── 3. Update conversation urgency in DB ──────────────────────────────────
-    // THIS is the fix — urgency must be persisted to conversations table
-    // so the dashboard and customers page show it correctly
+    // ── 3. Update conversation urgency in DB ──────────────────────────────────
+    // Smart Urgency logic: never downgrade urgency, only escalate
     if (conversationId && supabase) {
+      const weight = { low: 1, medium: 2, high: 3 };
+      const currentWeight = weight[convData?.urgency] || 0;
+      const newWeight = weight[urgency] || 1;
+      const finalUrgency = newWeight > currentWeight ? urgency : convData?.urgency || urgency;
+
       await supabase
         .from('conversations')
         .update({
-          urgency,
+          urgency: finalUrgency,
           updated_at: new Date().toISOString(),
         })
         .eq('id', conversationId)
-        .then(() => console.log(`✅ Urgency '${urgency}' saved to conversation ${conversationId}`))
+        .then(() => console.log(`✅ Urgency escalated to '${finalUrgency}' saved to conversation ${conversationId}`))
         .catch(e => console.warn('⚠️ Could not update urgency:', e.message));
     }
 
