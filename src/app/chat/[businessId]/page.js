@@ -256,7 +256,7 @@ export default function ChatPage() {
           </button>
         </div>
         <p className={styles.inputHint}>
-          Powered by CustomerIQ AI · Responses may take a few seconds
+          Powered by Bizz Assist AI · Responses may take a few seconds
         </p>
       </div>
     </div>

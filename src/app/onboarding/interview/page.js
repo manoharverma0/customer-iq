@@ -148,7 +148,7 @@ export default function InterviewPage() {
       {/* Header */}
       <div className={styles.header}>
         <div className={styles.headerLeft}>
-          <span className={styles.logo}>⚡ CustomerIQ</span>
+          <span className={styles.logo}>⚡ Bizz Assist</span>
           <span className={styles.headerTitle}>AI Setup Interview</span>
         </div>
         <div className={styles.progressWrap}>

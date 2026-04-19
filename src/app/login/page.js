@@ -91,7 +91,7 @@ export default function LoginPage() {
   return (
     <div className={styles.page}>
       <div className={styles.card}>
-        <Link href="/" className={styles.logo}>⚡ CustomerIQ</Link>
+        <Link href="/" className={styles.logo}>⚡ Bizz Assist</Link>
         <h1>Business Login</h1>
         <p className={styles.subtitle}>Sign in to manage your AI agent and view analytics.</p>
 

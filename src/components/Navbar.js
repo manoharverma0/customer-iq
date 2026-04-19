@@ -32,7 +32,7 @@ export default function Navbar() {
           </div>
           {!collapsed && (
             <div className={styles.logoText}>
-              <span className={styles.logoName}>CustomerIQ</span>
+              <span className={styles.logoName}>Bizz Assist</span>
               <span className={styles.logoPlan}>StyleCraft India</span>
             </div>
           )}

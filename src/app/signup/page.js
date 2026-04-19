@@ -85,7 +85,7 @@ export default function SignupPage() {
   return (
     <div className={styles.page}>
       <div className={styles.card}>
-        <Link href="/" className={styles.logo}>⚡ CustomerIQ</Link>
+        <Link href="/" className={styles.logo}>⚡ Bizz Assist</Link>
         <h1>Register Your Business</h1>
         <p className={styles.subtitle}>Join the waitlist. We'll onboard you personally after reviewing.</p>
 

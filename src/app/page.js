@@ -22,7 +22,7 @@ export default function HomePage() {
             </h1>
 
             <p className={styles.heroDesc}>
-              CustomerIQ gives your business a 24/7 AI sales assistant that understands your products,
+              Bizz Assist gives your business a 24/7 AI sales assistant that understands your products,
               pitches intelligently, and classifies leads by urgency — all in real time.
             </p>
 
@@ -57,7 +57,7 @@ export default function HomePage() {
                 <div className={styles.featureCardDots}>
                   <span /><span /><span />
                 </div>
-                <span className={styles.featureCardTitle}>CustomerIQ · Live Dashboard</span>
+                <span className={styles.featureCardTitle}>Bizz Assist · Live Dashboard</span>
               </div>
 
               <div className={styles.featureMetrics}>
@@ -171,7 +171,7 @@ export default function HomePage() {
         <div className={styles.footerInner}>
           <div className={styles.footerLogo}>
             <span className={styles.footerLogoMark}>⚡</span>
-            <span className={styles.footerLogoText}>CustomerIQ</span>
+            <span className={styles.footerLogoText}>Bizz Assist</span>
           </div>
           <p className={styles.footerDesc}>AI Customer Intelligence for Indian Businesses</p>
           <div className={styles.footerLinks}>

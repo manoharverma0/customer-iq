@@ -274,7 +274,7 @@ export async function POST(request) {
 // Twilio also sends GET requests to verify the webhook URL is reachable
 export async function GET() {
   return new Response(
-    '<?xml version="1.0" encoding="UTF-8"?><Response><Message>CustomerIQ WhatsApp webhook is live ✅</Message></Response>',
+    '<?xml version="1.0" encoding="UTF-8"?><Response><Message>Bizz Assist WhatsApp webhook is live ✅</Message></Response>',
     { status: 200, headers: { 'Content-Type': 'text/xml' } }
   );
 }

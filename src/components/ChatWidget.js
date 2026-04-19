@@ -268,7 +268,7 @@ export default function ChatWidget() {
               ⬆
             </button>
           </div>
-          <p className={styles.poweredBy}>Powered by AI ⚡ CustomerIQ</p>
+          <p className={styles.poweredBy}>Powered by AI ⚡ Bizz Assist</p>
         </div>
       </div>
 

@@ -2,7 +2,7 @@ import './globals.css';
 import Navbar from '@/components/Navbar';
 
 export const metadata = {
-  title: 'CustomerIQ — AI Customer Intelligence',
+  title: 'Bizz Assist — AI Business Assistant',
   description: 'Turn every conversation into a sale. AI-powered business assistant with urgency detection, semantic product search, and real-time analytics.',
 };
 
