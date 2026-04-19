@@ -44,42 +44,29 @@ const OFF_TOPIC_WORDS = ['bike', 'motorcycle', 'car', 'vehicle', 'laptop', 'phon
 // ─── PROMPT BUILDER ───────────────────────────────────────────────────────────
 function buildPrompt(dbSystemPrompt, retrievedProducts, businessName, buyerIntent) {
 
-  // ── Persona (from DB or default) ──────────────────────────────────────────
-  const persona = dbSystemPrompt
-    ? dbSystemPrompt.slice(0, 800) // Use first 800 chars — smaller models ignore long prompts
-    : `You are Priya, the friendly AI assistant for ${businessName}. You help customers find the perfect ethnic wear.`;
-
-  // ── Sales tone (SHORT — 3 lines max per mode) ─────────────────────────────
+  // ── Sales tone (SHORT — 1 line per mode) ──────────────────────────────────
   const salesTone = {
-    strong_buy: `Customer is ready to buy. Confirm their choice, create mild urgency ("limited stock!"), make payment easy (UPI/COD/card), ask for delivery address to close the order.`,
-    soft_buy:   `Customer is interested. Ask ONE qualifying question (occasion? budget?), then recommend the BEST matching product with exact price. Offer to help order.`,
-    browse:     `Customer is exploring. Recommend 1-2 products that match their interest, describe the occasion they're perfect for, end with a question to engage them further.`,
-    support:    `Customer has an issue. Acknowledge with empathy first, state the policy clearly (7-day returns, 24h refund), offer resolution. Be calm and reassuring.`,
-  }[buyerIntent] || `Be helpful and recommend relevant products from our catalog.`;
+    strong_buy: `Close the sale. Confirm choice, mention limited stock, ask for delivery address.`,
+    soft_buy:   `Customer is interested. Recommend the BEST product with price. Offer to order.`,
+    browse:     `Customer is exploring. Recommend 1-2 products, end with a question.`,
+    support:    `Customer has an issue. Show empathy, state policy (7-day returns), offer fix.`,
+  }[buyerIntent] || `Be helpful and recommend products.`;
 
-  // ── Relevant products (from vector search — specific match) ───────────────
-  let relevantSection = '';
-  if (retrievedProducts && retrievedProducts.length > 0) {
-    relevantSection = `\nBEST MATCHING PRODUCTS FOR THIS QUERY:\n` +
-      retrievedProducts.map((p, i) =>
-        `${i + 1}. ${p.name} — ₹${p.price} (${p.discount}% OFF) | ${p.description?.slice(0, 80)}`
-      ).join('\n');
-  }
+  // ── Compact prompt for small models (under 600 tokens) ────────────────────
+  return `You are Priya, AI sales assistant for ${businessName}.
 
-  // ── Final prompt (kept SHORT for smaller model compliance) ────────────────
-  return `${persona}
+PRODUCTS:
+1. Banarasi Silk Saree (Maroon) — ₹5,299 (34% OFF)
+2. Emerald Silk Saree (Green) — ₹4,499 (31% OFF)
+3. Royal Designer Kurta (Blue) — ₹1,499 (35% OFF)
+4. Bridal Lehenga Choli (Pink) — ₹8,999 (44% OFF)
+5. Kundan Jewelry Set — ₹3,199 (42% OFF)
+6. Premium Linen Shirt (Cream) — ₹899 (40% OFF)
 
-${GROUND_TRUTH_CATALOG}
-${relevantSection}
+Shipping: FREE above ₹999. Returns: 7-day easy returns. Payment: UPI/COD/Card.
 
-YOUR ROLE: ${salesTone}
-
-STRICT RULES (NEVER break these):
-- ONLY discuss the 6 products listed above. No other products exist.
-- NEVER give prices, names or details for products not in our list (bikes, electronics, food, etc.)
-- If asked off-topic: "I'm Priya from ${businessName}! I only help with our ethnic wear. What occasion are you shopping for? 😊"
-- Use EXACT prices from the list. Do NOT invent discounts or products.
-- Keep replies under 5 sentences. Be warm, specific, and helpful.`;
+TASK: ${salesTone}
+RULES: Only discuss these 6 products. Use exact prices. Keep reply under 4 sentences. Be warm and helpful. Use 1-2 emojis.`;
 }
 
 // ─── HALLUCINATION VALIDATOR ──────────────────────────────────────────────────
@@ -197,11 +184,14 @@ export async function generateAIReply(
 
   const systemPrompt = buildPrompt(dbSystemPrompt, retrievedProducts, businessName, buyerIntent);
 
+  // Normalize history roles: DB stores 'customer'/'ai', HF expects 'user'/'assistant'
+  const normalizedHistory = conversationHistory.slice(-6).map(m => ({
+    role: m.role === 'customer' ? 'user' : (m.role === 'ai' ? 'assistant' : m.role),
+    content: (m.content || '').slice(0, 300), // Trim long messages to keep prompt small
+  }));
+
   const messages = [
-    { role: 'system', content: systemPrompt },
-    // Include last 10 messages of history (enough context, not too much noise)
-    ...conversationHistory.slice(-10),
-    { role: 'user', content: message },
+    { role: 'user', content: systemPrompt + '\n\nCustomer says: ' + message },
   ];
 
   // Try Bytez (GPT-4.1) First
@@ -236,13 +226,19 @@ export async function generateAIReply(
       
       for (const model of MODELS) {
         try {
-          const out = await hf.chatCompletion({
+          // Race against a 8-second timeout (Vercel hobby = 10s max)
+          const timeoutPromise = new Promise((_, reject) =>
+            setTimeout(() => reject(new Error('HF timeout after 8s')), 8000)
+          );
+
+          const apiPromise = hf.chatCompletion({
             model,
             messages,
-            max_tokens: 350,
-            temperature: 0.1,
-            top_p: 0.85
+            max_tokens: 200,
+            temperature: 0.3,
           });
+
+          const out = await Promise.race([apiPromise, timeoutPromise]);
 
           const reply = out.choices?.[0]?.message?.content?.trim();
           if (!reply) throw new Error('Empty reply from model');
