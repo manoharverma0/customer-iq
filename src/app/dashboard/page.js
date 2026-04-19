@@ -31,25 +31,76 @@ export default function DashboardPage() {
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
+    // Safety: never show loading screen for more than 5 seconds
+    const timeout = setTimeout(() => setLoading(false), 5000);
+
+    // Run all fetches in parallel — don't chain
     Promise.all([
-      fetch(`/api/businesses?email=${DEMO_BUSINESS_EMAIL}`).then(r => r.json()).catch(() => null),
-    ]).then(([biz]) => {
-      const id = biz?.id;
-      return Promise.all([
-        fetch(`/api/analytics${id ? `?businessId=${id}` : ''}`).then(r => r.json()).catch(() => ({})),
-        fetch('/api/customers').then(r => r.json()).catch(() => ({ customers: [] })),
-      ]);
-    }).then(([a, c]) => {
-      setAnalytics(a);
-      setConversations(c.customers || []);
-    }).finally(() => setLoading(false));
+      fetch(`/api/businesses?email=${DEMO_BUSINESS_EMAIL}`).then(r => r.ok ? r.json() : null).catch(() => null),
+      fetch('/api/analytics').then(r => r.ok ? r.json() : {}).catch(() => ({})),
+      fetch('/api/customers').then(r => r.ok ? r.json() : { customers: [] }).catch(() => ({ customers: [] })),
+    ]).then(([biz, analyticsData, customersData]) => {
+      setAnalytics(analyticsData);
+      setConversations(customersData?.customers || []);
+      // If we got a businessId, re-fetch analytics scoped to it
+      if (biz?.id) {
+        fetch(`/api/analytics?businessId=${biz.id}`)
+          .then(r => r.ok ? r.json() : null)
+          .then(scoped => { if (scoped) setAnalytics(scoped); })
+          .catch(() => {});
+      }
+    }).catch(() => {}).finally(() => {
+      clearTimeout(timeout);
+      setLoading(false);
+    });
+
+    return () => clearTimeout(timeout);
   }, []);
 
   if (loading) {
     return (
-      <div className={styles.loading}>
-        <div className={styles.spinner} />
-        <span>Loading dashboard…</span>
+      <div className={styles.page}>
+        <div className={styles.header}>
+          <div className={styles.headerTop}>
+            <div className={styles.headerLeft}>
+              <div style={{ height: 28, width: 240, borderRadius: 8, background: 'linear-gradient(90deg, var(--border) 25%, var(--bg-hover) 50%, var(--border) 75%)', backgroundSize: '200% 100%', animation: 'shimmer 1.4s infinite' }} />
+              <div style={{ height: 16, width: 200, marginTop: 8, borderRadius: 6, background: 'linear-gradient(90deg, var(--border) 25%, var(--bg-hover) 50%, var(--border) 75%)', backgroundSize: '200% 100%', animation: 'shimmer 1.4s infinite' }} />
+            </div>
+          </div>
+        </div>
+        <style>{`@keyframes shimmer { 0%{background-position:200% 0} 100%{background-position:-200% 0} }`}</style>
+        <div className={styles.statsGrid}>
+          {[1,2,3,4].map(i => (
+            <div key={i} className={styles.statCard}>
+              <div style={{ height: 14, width: '50%', borderRadius: 6, background: 'linear-gradient(90deg, var(--border) 25%, var(--bg-hover) 50%, var(--border) 75%)', backgroundSize: '200% 100%', animation: 'shimmer 1.4s infinite', marginBottom: 16 }} />
+              <div style={{ height: 36, width: '70%', borderRadius: 6, background: 'linear-gradient(90deg, var(--border) 25%, var(--bg-hover) 50%, var(--border) 75%)', backgroundSize: '200% 100%', animation: 'shimmer 1.4s infinite', marginBottom: 10 }} />
+              <div style={{ height: 12, width: '40%', borderRadius: 6, background: 'linear-gradient(90deg, var(--border) 25%, var(--bg-hover) 50%, var(--border) 75%)', backgroundSize: '200% 100%', animation: 'shimmer 1.4s infinite' }} />
+            </div>
+          ))}
+        </div>
+        <div className={styles.contentGrid}>
+          <div className={styles.panel} style={{ minHeight: 300 }}>
+            <div className={styles.panelHeader}>
+              <div style={{ height: 16, width: 160, borderRadius: 6, background: 'linear-gradient(90deg, var(--border) 25%, var(--bg-hover) 50%, var(--border) 75%)', backgroundSize: '200% 100%', animation: 'shimmer 1.4s infinite' }} />
+            </div>
+            <div style={{ padding: 16 }}>
+              {[1,2,3,4].map(i => (
+                <div key={i} style={{ display: 'flex', gap: 12, alignItems: 'center', padding: '12px 0', borderBottom: '1px solid var(--border)' }}>
+                  <div style={{ width: 32, height: 32, borderRadius: '50%', background: 'linear-gradient(90deg, var(--border) 25%, var(--bg-hover) 50%, var(--border) 75%)', backgroundSize: '200% 100%', animation: 'shimmer 1.4s infinite', flexShrink: 0 }} />
+                  <div style={{ flex: 1 }}>
+                    <div style={{ height: 13, width: '40%', borderRadius: 5, background: 'linear-gradient(90deg, var(--border) 25%, var(--bg-hover) 50%, var(--border) 75%)', backgroundSize: '200% 100%', animation: 'shimmer 1.4s infinite', marginBottom: 7 }} />
+                    <div style={{ height: 11, width: '70%', borderRadius: 5, background: 'linear-gradient(90deg, var(--border) 25%, var(--bg-hover) 50%, var(--border) 75%)', backgroundSize: '200% 100%', animation: 'shimmer 1.4s infinite' }} />
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+          <div className={styles.panel} style={{ minHeight: 300 }}>
+            <div className={styles.panelHeader}>
+              <div style={{ height: 16, width: 130, borderRadius: 6, background: 'linear-gradient(90deg, var(--border) 25%, var(--bg-hover) 50%, var(--border) 75%)', backgroundSize: '200% 100%', animation: 'shimmer 1.4s infinite' }} />
+            </div>
+          </div>
+        </div>
       </div>
     );
   }

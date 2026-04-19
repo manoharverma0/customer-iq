@@ -43,7 +43,7 @@ async function getOrCreateWhatsAppConversation(businessId, fromNumber) {
   // Look for an existing open conversation for this sender
   const { data: existing } = await supabase
     .from('conversations')
-    .select('id')
+    .select('id, ai_paused')
     .eq('business_id', businessId)
     .eq('customer_name', fromNumber)
     .eq('channel', 'whatsapp')
@@ -52,11 +52,11 @@ async function getOrCreateWhatsAppConversation(businessId, fromNumber) {
     .limit(1)
     .single();
 
-  if (existing) return existing.id;
+  if (existing) return existing;
 
   // Create a new one
   const conv = await createConversation(businessId, fromNumber, 'whatsapp');
-  return conv?.id || null;
+  return conv ? { id: conv.id, ai_paused: false } : null;
 }
 
 /**
@@ -83,6 +83,13 @@ async function loadHistory(conversationId) {
  * @param {string} message - The text to send back to WhatsApp
  */
 function twimlResponse(message) {
+  if (!message) {
+    return new Response('<?xml version="1.0" encoding="UTF-8"?><Response></Response>', {
+      status: 200,
+      headers: { 'Content-Type': 'text/xml; charset=utf-8' },
+    });
+  }
+
   // Sanitize any XML-breaking characters
   const safe = message
     .replace(/&/g, '&amp;')
@@ -157,10 +164,13 @@ export async function POST(request) {
     console.log(`🎯 Urgency: ${urgency} | Intent: ${buyerIntent} | from: ${fromNum}`);
 
     // ── 2. Get/create conversation + load history (parallel) ──────────────────
-    const [conversationId, history] = await Promise.all([
+    const [convData, history] = await Promise.all([
       businessId ? getOrCreateWhatsAppConversation(businessId, fromNum) : Promise.resolve(null),
       Promise.resolve([]), // will load after we have conversationId
     ]);
+    
+    const conversationId = convData?.id || null;
+    const ai_paused = convData?.ai_paused || false;
 
     // Load history if we have a conversation
     const contextHistory = conversationId ? await loadHistory(conversationId) : [];
@@ -193,6 +203,12 @@ export async function POST(request) {
     // ── 5. Generate AI reply (with buyer intent for sales mode) ───────────────
     let reply = '';
     let aiProvider = 'huggingface';
+
+    if (ai_paused) {
+      console.log(`⏸️ AI is paused (human takeover) for ${fromNum}. Skipping AI generation.`);
+      await saveIncoming; // Ensure incoming is saved before we return
+      return twimlResponse(''); // Return empty so Twilio sends nothing
+    }
 
     try {
       reply = await generateAIReply(

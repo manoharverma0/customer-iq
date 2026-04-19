@@ -55,7 +55,7 @@ export async function POST(request) {
 
     // ── TAKE OVER ─────────────────────────────────────────────────────────────
     if (action === 'takeover') {
-      await supabase
+      const { error: updateErr } = await supabase
         .from('conversations')
         .update({
           ai_paused: true,
@@ -63,21 +63,25 @@ export async function POST(request) {
           human_last_replied_at: new Date().toISOString(),
         })
         .eq('id', conversationId);
+        
+      if (updateErr) throw new Error('Failed to update discussion: ' + updateErr.message);
 
       // Insert a system message so the customer knows a human is now helping
-      await supabase.from('messages').insert({
+      const { error: msgErr } = await supabase.from('messages').insert({
         conversation_id: conversationId,
         role: 'ai',
         content: '👤 You are now connected with a StyleCraft India team member! How can we help you? 😊',
         metadata: { isHandoff: true, agentName: agentName || 'Owner' },
       });
+      
+      if (msgErr) console.warn('Failed to insert handoff message:', msgErr.message);
 
       return NextResponse.json({ ok: true, mode: 'human' });
     }
 
     // ── RELEASE back to AI ────────────────────────────────────────────────────
     if (action === 'release') {
-      await supabase
+      const { error: relErr } = await supabase
         .from('conversations')
         .update({
           ai_paused: false,
@@ -85,6 +89,8 @@ export async function POST(request) {
           human_last_replied_at: null,
         })
         .eq('id', conversationId);
+        
+      if (relErr) throw new Error('Failed to release: ' + relErr.message);
 
       // Insert a system message
       await supabase.from('messages').insert({
@@ -103,22 +109,62 @@ export async function POST(request) {
         return NextResponse.json({ error: 'message required' }, { status: 400 });
       }
 
+      // Check if conversation is WhatsApp
+      const { data: conv, error: convErr } = await supabase
+        .from('conversations')
+        .select('channel, customer_name')
+        .eq('id', conversationId)
+        .single();
+        
+      if (convErr || !conv) throw new Error('Conversation not found');
+
       // Save the human reply as 'ai' role (so it shows on customer's side as the assistant)
-      const { data: msg } = await supabase.from('messages').insert({
+      const { data: msg, error: msgErr } = await supabase.from('messages').insert({
         conversation_id: conversationId,
         role: 'ai',
         content: message.trim(),
         metadata: { isHuman: true, agentName: agentName || 'Owner' },
       }).select().single();
+      
+      if (msgErr) throw new Error('Failed to send message: ' + msgErr.message);
+
+      // Send via Twilio if it's a WhatsApp channel
+      if (conv.channel === 'whatsapp' && process.env.TWILIO_ACCOUNT_SID) {
+        try {
+          const twilio = require('twilio');
+          const client = twilio(process.env.TWILIO_ACCOUNT_SID, process.env.TWILIO_AUTH_TOKEN);
+          
+          // Formulate from/to phone numbers
+          // Our Twilio sender
+          const twilioFrom = process.env.TWILIO_WHATSAPP_NUMBER || 'whatsapp:+14155238886'; 
+          // Check if customer_name already has 'whatsapp:' prefix, otherwise add it
+          const twilioTo = conv.customer_name.startsWith('whatsapp:') 
+            ? conv.customer_name 
+            : `whatsapp:+${conv.customer_name.replace(/\D/g, '')}`;
+
+          await client.messages.create({
+            body: `${agentName || 'Owner'}: ${message.trim()}`,
+            from: twilioFrom,
+            to: twilioTo
+          });
+          
+          console.log(`✅ Human reply sent via Twilio to ${twilioTo}`);
+        } catch (twilioErr) {
+          console.warn('⚠️ Failed to push message to Twilio:', twilioErr.message);
+          // Don't throw — we still saved it to the DB so the dashboard shows it
+        }
+      }
 
       // Reset 5-min timer
-      await supabase
+      const { error: updErr } = await supabase
         .from('conversations')
         .update({
           human_last_replied_at: new Date().toISOString(),
           updated_at: new Date().toISOString(),
         })
         .eq('id', conversationId);
+        
+      if (updErr) throw new Error('Failed to update timer: ' + updErr.message);
 
       return NextResponse.json({ ok: true, message: msg });
     }

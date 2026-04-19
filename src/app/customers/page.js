@@ -1,250 +1,233 @@
 'use client';
 
 import { useState, useEffect } from 'react';
+import Link from 'next/link';
 import styles from './customers.module.css';
+
+const URGENCY_CONFIG = {
+  high:   { label: 'High Priority',   bg: '#fef2f2', color: '#dc2626', border: '#fecaca', dot: '🔴', desc: 'Needs immediate attention — hot lead or complaint' },
+  medium: { label: 'Medium Priority', bg: '#fffbeb', color: '#d97706', border: '#fde68a', dot: '🟡', desc: 'Follow up within 1 hour — warm interest or question' },
+  low:    { label: 'Low Priority',    bg: '#ecfdf5', color: '#059669', border: '#a7f3d0', dot: '🟢', desc: 'Standard response time — browsing or general inquiry' },
+};
+
+function timeAgo(ts) {
+  if (!ts) return '';
+  const diff = Math.floor((Date.now() - new Date(ts)) / 1000);
+  if (diff < 60) return `${diff}s ago`;
+  if (diff < 3600) return `${Math.floor(diff / 60)}m ago`;
+  if (diff < 86400) return `${Math.floor(diff / 3600)}h ago`;
+  return `${Math.floor(diff / 86400)}d ago`;
+}
+
+function Avatar({ name, size = 36 }) {
+  const initials = (name || 'V').split(' ').map(w => w[0]).join('').slice(0, 2).toUpperCase();
+  const colors = ['#4f46e5','#0284c7','#059669','#d97706','#dc2626','#7c3aed','#0891b2'];
+  const color = colors[(name || 'V').charCodeAt(0) % colors.length];
+  return (
+    <div style={{
+      width: size, height: size, minWidth: size,
+      borderRadius: '50%', background: color,
+      color: '#fff', display: 'flex', alignItems: 'center', justifyContent: 'center',
+      fontSize: size * 0.38, fontWeight: 700,
+    }}>
+      {initials}
+    </div>
+  );
+}
 
 export default function CustomersPage() {
   const [customers, setCustomers] = useState([]);
-  const [selectedCustomer, setSelectedCustomer] = useState(null);
   const [loading, setLoading] = useState(true);
   const [filter, setFilter] = useState('all');
+  const [selected, setSelected] = useState(null);
 
   useEffect(() => {
+    const timeout = setTimeout(() => setLoading(false), 5000);
     fetch('/api/customers')
-      .then(res => res.json())
-      .then(data => {
-        setCustomers(data.customers || []);
-        setLoading(false);
-      })
-      .catch(() => setLoading(false));
+      .then(r => r.json())
+      .then(d => { setCustomers(d.customers || []); })
+      .catch(() => {})
+      .finally(() => { clearTimeout(timeout); setLoading(false); });
+    return () => clearTimeout(timeout);
   }, []);
 
-  const fetchCustomerDetail = async (id) => {
-    try {
-      const res = await fetch(`/api/customers?id=${id}`);
-      const data = await res.json();
-      setSelectedCustomer(data);
-    } catch (err) {
-      console.error('Failed to fetch customer', err);
-    }
-  };
-
-  const getStatusConfig = (status) => {
-    const configs = {
-      'hot-lead': { label: '🔥 Hot Lead', color: '#ef4444', bg: 'rgba(239,68,68,0.12)' },
-      'warm-lead': { label: '🌟 Warm Lead', color: '#f59e0b', bg: 'rgba(245,158,11,0.12)' },
-      'active': { label: '✅ Active', color: '#22c55e', bg: 'rgba(34,197,94,0.12)' },
-      'new': { label: '🆕 New', color: '#06b6d4', bg: 'rgba(6,182,212,0.12)' },
-      'at-risk': { label: '⚠️ At Risk', color: '#ef4444', bg: 'rgba(239,68,68,0.12)' },
-    };
-    return configs[status] || configs.active;
-  };
-
-  const getSentimentBar = (score) => {
-    let color = '#22c55e';
-    if (score < 0.5) color = '#ef4444';
-    else if (score < 0.7) color = '#f59e0b';
-    return { width: `${score * 100}%`, background: color };
-  };
-
-  const filteredCustomers = filter === 'all'
-    ? customers
-    : customers.filter(c => c.status === filter);
-
-  const filterOptions = [
-    { value: 'all', label: 'All' },
-    { value: 'hot-lead', label: '🔥 Hot' },
-    { value: 'active', label: '✅ Active' },
-    { value: 'warm-lead', label: '🌟 Warm' },
-    { value: 'at-risk', label: '⚠️ At Risk' },
-    { value: 'new', label: '🆕 New' },
-  ];
-
-  if (loading) {
-    return (
-      <div className={styles.loading}>
-        <div className={styles.spinner} />
-        <p>Loading customers...</p>
-      </div>
-    );
-  }
+  const filtered = filter === 'all' ? customers : customers.filter(c => (c.urgency || 'low') === filter);
 
   return (
     <div className={styles.page}>
-      <div className={styles.container}>
-        {/* Header */}
-        <div className={styles.header}>
-          <div>
-            <h1 className={styles.title}>Customer Intelligence</h1>
-            <p className={styles.subtitle}>AI-scored leads, sentiment analysis & interaction history</p>
-          </div>
-          <div className={styles.headerStats}>
-            <div className={styles.miniStat}>
-              <span className={styles.miniStatValue}>{customers.length}</span>
-              <span className={styles.miniStatLabel}>Total</span>
-            </div>
-            <div className={styles.miniStat}>
-              <span className={styles.miniStatValue}>{customers.filter(c => c.status === 'hot-lead').length}</span>
-              <span className={styles.miniStatLabel}>Hot Leads</span>
-            </div>
-            <div className={styles.miniStat}>
-              <span className={styles.miniStatValue}>₹{(customers.reduce((s, c) => s + c.totalSpent, 0) / 1000).toFixed(0)}K</span>
-              <span className={styles.miniStatLabel}>Total Revenue</span>
-            </div>
-          </div>
+      {/* ── Header ──────────────────────────────────────── */}
+      <div className={styles.header}>
+        <div>
+          <h1 className={styles.title}>Customers</h1>
+          <p className={styles.subtitle}>Customer profiles with AI conversation urgency</p>
         </div>
-
-        {/* Filters */}
-        <div className={styles.filters}>
-          {filterOptions.map(opt => (
-            <button
-              key={opt.value}
-              className={`${styles.filterBtn} ${filter === opt.value ? styles.filterActive : ''}`}
-              onClick={() => setFilter(opt.value)}
-            >
-              {opt.label}
-            </button>
-          ))}
-        </div>
-
-        {/* Main Content */}
-        <div className={styles.content}>
-          {/* Customer Grid */}
-          <div className={styles.grid}>
-            {filteredCustomers.map((customer, i) => {
-              const statusConf = getStatusConfig(customer.status);
-              return (
-                <button
-                  key={customer.id}
-                  className={`${styles.card} ${selectedCustomer?.id === customer.id ? styles.cardActive : ''}`}
-                  onClick={() => fetchCustomerDetail(customer.id)}
-                  style={{ animationDelay: `${i * 0.05}s` }}
-                >
-                  <div className={styles.cardTop}>
-                    <div className={styles.avatar}>
-                      {customer.name.charAt(0)}
-                    </div>
-                    <span
-                      className={styles.statusBadge}
-                      style={{ color: statusConf.color, background: statusConf.bg }}
-                    >
-                      {statusConf.label}
-                    </span>
-                  </div>
-
-                  <h3 className={styles.cardName}>{customer.name}</h3>
-                  <p className={styles.cardChannel}>{customer.channel} • {customer.conversations} conversations</p>
-
-                  <div className={styles.cardMetrics}>
-                    <div className={styles.cardMetric}>
-                      <span className={styles.metricLabel}>Revenue</span>
-                      <span className={styles.metricValue}>₹{customer.totalSpent.toLocaleString()}</span>
-                    </div>
-                    <div className={styles.cardMetric}>
-                      <span className={styles.metricLabel}>Lead Score</span>
-                      <span className={styles.metricValue}>{customer.leadScore}/100</span>
-                    </div>
-                  </div>
-
-                  <div className={styles.sentimentRow}>
-                    <span className={styles.sentimentLabel}>Sentiment</span>
-                    <div className={styles.sentimentBar}>
-                      <div className={styles.sentimentFill} style={getSentimentBar(customer.sentiment)} />
-                    </div>
-                    <span className={styles.sentimentScore}>{(customer.sentiment * 100).toFixed(0)}%</span>
-                  </div>
-
-                  <div className={styles.tags}>
-                    {customer.tags.slice(0, 3).map(tag => (
-                      <span key={tag} className={styles.tag}>{tag}</span>
-                    ))}
-                  </div>
-                </button>
-              );
-            })}
-          </div>
-
-          {/* Customer Detail Sidebar */}
-          {selectedCustomer && (
-            <aside className={styles.detail}>
-              <div className={styles.detailHeader}>
-                <div className={styles.detailAvatar}>
-                  {selectedCustomer.name.charAt(0)}
-                </div>
-                <h3>{selectedCustomer.name}</h3>
-                <p className={styles.detailEmail}>{selectedCustomer.email}</p>
-                <p className={styles.detailPhone}>{selectedCustomer.phone}</p>
-              </div>
-
-              <div className={styles.detailSection}>
-                <h4>Key Metrics</h4>
-                <div className={styles.detailMetrics}>
-                  <div className={styles.detailMetric}>
-                    <span className={styles.dmLabel}>Total Spent</span>
-                    <span className={styles.dmValue}>₹{selectedCustomer.totalSpent.toLocaleString()}</span>
-                  </div>
-                  <div className={styles.detailMetric}>
-                    <span className={styles.dmLabel}>Lead Score</span>
-                    <span className={styles.dmValue}>{selectedCustomer.leadScore}/100</span>
-                  </div>
-                  <div className={styles.detailMetric}>
-                    <span className={styles.dmLabel}>Sentiment</span>
-                    <span className={styles.dmValue}>{(selectedCustomer.sentiment * 100).toFixed(0)}%</span>
-                  </div>
-                  <div className={styles.detailMetric}>
-                    <span className={styles.dmLabel}>Conversations</span>
-                    <span className={styles.dmValue}>{selectedCustomer.conversations?.length || selectedCustomer.conversationCount || 0}</span>
-                  </div>
-                </div>
-              </div>
-
-              {selectedCustomer.conversations && selectedCustomer.conversations.length > 0 && (
-                <div className={styles.detailSection}>
-                  <h4>Recent Conversations</h4>
-                  <div className={styles.convHistory}>
-                    {selectedCustomer.conversations.map(conv => (
-                      <div key={conv.id} className={styles.convHistItem}>
-                        <div className={styles.convHistHeader}>
-                          <span className={styles.convHistChannel}>{conv.channel}</span>
-                          <span className={styles.convHistUrgency} style={{
-                            color: conv.urgency === 'high' ? '#ef4444' : conv.urgency === 'medium' ? '#f59e0b' : '#22c55e',
-                          }}>
-                            {conv.urgency === 'high' ? '🔴' : conv.urgency === 'medium' ? '🟡' : '🟢'} {conv.urgency}
-                          </span>
-                        </div>
-                        <p className={styles.convHistMsg}>
-                          {conv.messages[0]?.content?.slice(0, 100)}...
-                        </p>
-                        {conv.revenue !== 0 && (
-                          <span className={styles.convHistRev}>
-                            {conv.revenue > 0 ? `+₹${conv.revenue}` : `-₹${Math.abs(conv.revenue)}`}
-                          </span>
-                        )}
-                      </div>
-                    ))}
-                  </div>
-                </div>
-              )}
-
-              <div className={styles.detailSection}>
-                <h4>Tags</h4>
-                <div className={styles.tags}>
-                  {selectedCustomer.tags?.map(tag => (
-                    <span key={tag} className={styles.tag}>{tag}</span>
-                  ))}
-                </div>
-              </div>
-
-              <button
-                className={styles.closeDetail}
-                onClick={() => setSelectedCustomer(null)}
-              >
-                ✕ Close
-              </button>
-            </aside>
-          )}
-        </div>
+        <Link href="/live" className={styles.liveLink}>
+          <span className={styles.liveDot} />
+          Watch Live Conversations →
+        </Link>
       </div>
+
+      {/* ── Urgency Summary ─────────────────────────────── */}
+      <div className={styles.urgencySummary}>
+        {Object.entries(URGENCY_CONFIG).map(([key, cfg]) => {
+          const count = customers.filter(c => (c.urgency || 'low') === key).length;
+          return (
+            <button
+              key={key}
+              className={`${styles.urgCard} ${filter === key ? styles.urgCardActive : ''}`}
+              onClick={() => setFilter(filter === key ? 'all' : key)}
+              style={filter === key ? { borderColor: cfg.color, background: cfg.bg } : {}}
+            >
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                <span style={{ fontSize: '1.4rem' }}>{cfg.dot}</span>
+                <span style={{ fontSize: '1.5rem', fontWeight: 800, color: cfg.color }}>{count}</span>
+              </div>
+              <div style={{ marginTop: 8 }}>
+                <div style={{ fontWeight: 700, fontSize: '0.855rem', color: cfg.color }}>{cfg.label}</div>
+                <div style={{ fontSize: '0.72rem', color: 'var(--text-tertiary)', marginTop: 3, lineHeight: 1.4 }}>{cfg.desc}</div>
+              </div>
+            </button>
+          );
+        })}
+        <button
+          className={`${styles.urgCard} ${filter === 'all' ? styles.urgCardActive : ''}`}
+          onClick={() => setFilter('all')}
+          style={filter === 'all' ? { borderColor: 'var(--brand)', background: 'var(--brand-50)' } : {}}
+        >
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+            <span style={{ fontSize: '1.4rem' }}>👥</span>
+            <span style={{ fontSize: '1.5rem', fontWeight: 800, color: 'var(--brand)' }}>{customers.length}</span>
+          </div>
+          <div style={{ marginTop: 8 }}>
+            <div style={{ fontWeight: 700, fontSize: '0.855rem', color: 'var(--brand)' }}>All Customers</div>
+            <div style={{ fontSize: '0.72rem', color: 'var(--text-tertiary)', marginTop: 3 }}>Click to reset filter</div>
+          </div>
+        </button>
+      </div>
+
+      {/* ── Customer Table ───────────────────────────────── */}
+      <div className={styles.tableWrap}>
+        {loading ? (
+          /* Skeleton */
+          <div className={styles.skeleton}>
+            {[1,2,3,4,5].map(i => (
+              <div key={i} className={styles.skelRow}>
+                <div className={styles.skelAvatar} />
+                <div style={{ flex: 1 }}>
+                  <div className={styles.skelLine} style={{ width: '35%', marginBottom: 6 }} />
+                  <div className={styles.skelLine} style={{ width: '60%' }} />
+                </div>
+                <div className={styles.skelLine} style={{ width: 80 }} />
+                <div className={styles.skelLine} style={{ width: 60 }} />
+              </div>
+            ))}
+          </div>
+        ) : filtered.length === 0 ? (
+          <div className={styles.empty}>
+            <span className={styles.emptyIcon}>👥</span>
+            <p>No customers yet. Start a chat to see customers here.</p>
+          </div>
+        ) : (
+          <table className={styles.table}>
+            <thead>
+              <tr>
+                <th>Customer</th>
+                <th>Last Message</th>
+                <th>Urgency</th>
+                <th>Channel</th>
+                <th>Last Active</th>
+                <th>Action</th>
+              </tr>
+            </thead>
+            <tbody>
+              {filtered.map(c => {
+                const urgency = c.urgency || 'low';
+                const cfg = URGENCY_CONFIG[urgency];
+                return (
+                  <tr
+                    key={c.id}
+                    className={styles.tableRow}
+                    onClick={() => setSelected(selected?.id === c.id ? null : c)}
+                  >
+                    {/* Customer name + avatar */}
+                    <td>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                        <Avatar name={c.customer_name || c.customerName} />
+                        <div>
+                          <div className={styles.custName}>{c.customer_name || c.customerName || 'Visitor'}</div>
+                          {c.customer_phone && <div className={styles.custSub}>{c.customer_phone}</div>}
+                        </div>
+                      </div>
+                    </td>
+                    {/* Last message preview */}
+                    <td>
+                      <div className={styles.msgPreview}>
+                        {c.lastMessage || c.recentMessages?.[0] || '—'}
+                      </div>
+                    </td>
+                    {/* Urgency badge */}
+                    <td>
+                      <span className={styles.urgBadge} style={{ background: cfg.bg, color: cfg.color, borderColor: cfg.border }}>
+                        {cfg.dot} {cfg.label}
+                      </span>
+                    </td>
+                    {/* Channel */}
+                    <td>
+                      <span className={styles.channelBadge}>
+                        {c.channel === 'whatsapp' ? '📱' : '💻'} {c.channel || 'website'}
+                      </span>
+                    </td>
+                    {/* Time */}
+                    <td className={styles.timeCell}>{timeAgo(c.lastActivity || c.updated_at)}</td>
+                    {/* Action */}
+                    <td>
+                      <Link href="/live" className={styles.viewBtn} onClick={e => e.stopPropagation()}>
+                        View Chat →
+                      </Link>
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        )}
+      </div>
+
+      {/* ── Expanded urgency detail (below selected row) ── */}
+      {selected && (() => {
+        const urgency = selected.urgency || 'low';
+        const cfg = URGENCY_CONFIG[urgency];
+        return (
+          <div className={styles.detailPanel} style={{ borderColor: cfg.border }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', flexWrap: 'wrap', gap: 12 }}>
+              <div style={{ display: 'flex', gap: 14, alignItems: 'flex-start' }}>
+                <Avatar name={selected.customer_name || selected.customerName} size={48} />
+                <div>
+                  <h3 className={styles.detailName}>{selected.customer_name || selected.customerName || 'Visitor'}</h3>
+                  {selected.customer_phone && <div className={styles.detailSub}>{selected.customer_phone}</div>}
+                  <div style={{ display: 'flex', gap: 8, marginTop: 8, flexWrap: 'wrap' }}>
+                    <span className={styles.urgBadge} style={{ background: cfg.bg, color: cfg.color, borderColor: cfg.border }}>
+                      {cfg.dot} {cfg.label}
+                    </span>
+                    <span className={styles.detailDesc}>{cfg.desc}</span>
+                  </div>
+                </div>
+              </div>
+              <Link href="/live" className={styles.liveBtn}>
+                💬 Open in Live Chat →
+              </Link>
+            </div>
+            {selected.recentMessages?.length > 0 && (
+              <div className={styles.recentMsgs}>
+                <div className={styles.recentLabel}>Recent messages</div>
+                {selected.recentMessages.slice(0, 3).map((m, i) => (
+                  <div key={i} className={styles.recentMsg}>{m}</div>
+                ))}
+              </div>
+            )}
+          </div>
+        );
+      })()}
     </div>
   );
 }

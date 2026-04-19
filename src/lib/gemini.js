@@ -10,11 +10,11 @@
 
 const HF_API_BASE = 'https://api-inference.huggingface.co/models';
 
-// Model waterfall: fastest/best first
+// Model waterfall: fastest/best first (using un-gated models for free tier)
 const MODELS = [
-  'Qwen/Qwen2.5-72B-Instruct',
-  'mistralai/Mistral-7B-Instruct-v0.3',
+  'google/gemma-2-2b-it',
   'HuggingFaceH4/zephyr-7b-beta',
+  'mistralai/Mistral-Nemo-Instruct-2407',
 ];
 
 // ─── GROUND TRUTH CATALOG ─────────────────────────────────────────────────────
@@ -181,6 +181,8 @@ function getSafeFallback(message, buyerIntent) {
     `What are you looking for today? 😊`;
 }
 
+import Bytez from "bytez.js";
+
 // ─── MAIN FUNCTION ────────────────────────────────────────────────────────────
 export async function generateAIReply(
   message,
@@ -190,13 +192,8 @@ export async function generateAIReply(
   businessName = 'StyleCraft India',
   buyerIntent = 'browse'
 ) {
+  const bytezKey = process.env.BYTEZ_KEY;
   const hfToken = process.env.HF_TOKEN;
-
-  // If no HF token, use safe deterministic fallback immediately
-  if (!hfToken) {
-    console.warn('HF_TOKEN not set — using safe fallback');
-    return getSafeFallback(message, buyerIntent);
-  }
 
   const systemPrompt = buildPrompt(dbSystemPrompt, retrievedProducts, businessName, buyerIntent);
 
@@ -207,50 +204,67 @@ export async function generateAIReply(
     { role: 'user', content: message },
   ];
 
-  let lastError;
-
-  for (const model of MODELS) {
+  // Try Bytez (GPT-4.1) First
+  if (bytezKey) {
     try {
-      const response = await fetch(`${HF_API_BASE}/${model}/v1/chat/completions`, {
-        method: 'POST',
-        headers: {
-          'Authorization': `Bearer ${hfToken}`,
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-          model,
-          messages,
-          max_tokens: 350,      // Short = less room to hallucinate
-          temperature: 0.1,     // Very low = maximum factual accuracy
-          top_p: 0.85,
-          repetition_penalty: 1.1,
-          stream: false,
-        }),
-      });
-
-      if (!response.ok) {
-        const errText = await response.text();
-        throw new Error(`${response.status}: ${errText.slice(0, 120)}`);
+      const sdk = new Bytez(bytezKey);
+      const model = sdk.model("openai/gpt-4.1");
+      
+      const { error, output } = await model.run(messages);
+      
+      if (error) {
+        console.warn('❌ Bytez failed:', error);
+      } else if (output) {
+        const reply = typeof output === 'string' ? output.trim() : (output[0]?.text || '').trim();
+        if (reply && validateResponse(reply, message)) {
+          console.log(`✅ Bytez AI [openai/gpt-4.1] intent:${buyerIntent} len:${reply.length}`);
+          return reply;
+        } else {
+          console.warn(`⚠️ Hallucination detected in Bytez response or empty string.`);
+        }
       }
-
-      const data = await response.json();
-      const reply = data?.choices?.[0]?.message?.content?.trim();
-
-      if (!reply) throw new Error('Empty reply from model');
-
-      // ── Validate: did the model hallucinate? ──────────────────────────────
-      if (!validateResponse(reply, message)) {
-        console.warn(`⚠️ Hallucination detected in [${model.split('/')[1]}] response — using safe fallback`);
-        return getSafeFallback(message, buyerIntent);
-      }
-
-      console.log(`✅ AI [${model.split('/')[1]}] intent:${buyerIntent} len:${reply.length}`);
-      return reply;
-
     } catch (err) {
-      lastError = err;
-      console.warn(`❌ ${model.split('/')[1]} failed:`, err.message?.slice(0, 80));
+      console.warn(`❌ Bytez API Error:`, err.message?.slice(0, 80));
     }
+  }
+
+  // Fallback to HuggingFace Models if Bytez fails or key is missing
+  if (hfToken) {
+    try {
+      const { HfInference } = require('@huggingface/inference');
+      const hf = new HfInference(hfToken);
+      
+      for (const model of MODELS) {
+        try {
+          const out = await hf.chatCompletion({
+            model,
+            messages,
+            max_tokens: 350,
+            temperature: 0.1,
+            top_p: 0.85
+          });
+
+          const reply = out.choices?.[0]?.message?.content?.trim();
+          if (!reply) throw new Error('Empty reply from model');
+
+          // ── Validate: did the model hallucinate? ──────────────────────────────
+          if (!validateResponse(reply, message)) {
+            console.warn(`⚠️ Hallucination detected in [${model.split('/')[1]}] response — skipping to next`);
+            continue;
+          }
+
+          console.log(`✅ AI [${model.split('/')[1]}] intent:${buyerIntent} len:${reply.length}`);
+          return reply;
+
+        } catch (err) {
+          console.warn(`❌ ${model.split('/')[1]} failed:`, err.message?.slice(0, 80));
+        }
+      }
+    } catch (sdkErr) {
+      console.warn(`❌ Failed to init HF SDK:`, sdkErr.message);
+    }
+  } else {
+    console.warn('Neither BYTEZ_KEY nor HF_TOKEN is set.');
   }
 
   // All models failed — use safe deterministic fallback

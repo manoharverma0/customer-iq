@@ -219,7 +219,7 @@ export default function CatalogPage() {
                 )}
               </div>
 
-              {/* Info */}
+              {/* Info — clean, no description */}
               <div className={styles.info}>
                 <span className={styles.categoryTag}>{product.categoryLabel}</span>
                 <h3 className={styles.name}>{product.name}</h3>
@@ -240,7 +240,7 @@ export default function CatalogPage() {
                   )}
                 </div>
 
-                {/* Tags */}
+                {/* Tags — max 3 */}
                 <div className={styles.tags}>
                   {product.tags.slice(0, 3).map(t => (
                     <span key={t} className={styles.tag}>{t}</span>
@@ -249,18 +249,8 @@ export default function CatalogPage() {
 
                 {/* Actions */}
                 <div className={styles.actions}>
-                  <button
-                    className={styles.chatBtn}
-                    onClick={() => openOrder(product)}
-                  >
-                    💬 Order via Chat
-                  </button>
-                  <button
-                    className={styles.waBtn}
-                    onClick={() => whatsappOrder(product)}
-                  >
-                    📱 WhatsApp
-                  </button>
+                  <button className={styles.chatBtn} onClick={() => openOrder(product)}>💬 Order via Chat</button>
+                  <button className={styles.waBtn} onClick={() => whatsappOrder(product)}>📱 WA</button>
                 </div>
               </div>
             </div>
