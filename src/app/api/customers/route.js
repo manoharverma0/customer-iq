@@ -29,16 +29,9 @@ export async function GET(request) {
     }));
 
     // Combine seed + real customers
-    const allCustomers = [...seedCustomers, ...realCustomers];
+    const allCustomers = [...realCustomers];
 
     if (id) {
-      // Check seed customers first
-      const seedCustomer = seedCustomers.find(c => c.id === id);
-      if (seedCustomer) {
-        const customerConversations = seedConversations.filter(c => c.customerId === id);
-        return NextResponse.json({ ...seedCustomer, conversations: customerConversations });
-      }
-
       // Check real customers
       const realCustomer = realCustomers.find(c => c.id === id);
       if (realCustomer) {
@@ -61,6 +54,6 @@ export async function GET(request) {
     return NextResponse.json({ customers: allCustomers, total: allCustomers.length });
   } catch (error) {
     console.error('Customers API error:', error);
-    return NextResponse.json({ customers: seedCustomers, total: seedCustomers.length });
+    return NextResponse.json({ customers: [], total: 0 });
   }
 }

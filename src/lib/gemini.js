@@ -12,9 +12,9 @@ const HF_API_BASE = 'https://api-inference.huggingface.co/models';
 
 // Model waterfall: fastest/best first (using un-gated models for free tier)
 const MODELS = [
+  'meta-llama/Llama-3.2-1B-Instruct', 
   'google/gemma-2-2b-it',
   'HuggingFaceH4/zephyr-7b-beta',
-  'mistralai/Mistral-Nemo-Instruct-2407',
 ];
 
 // ─── GROUND TRUTH CATALOG ─────────────────────────────────────────────────────
