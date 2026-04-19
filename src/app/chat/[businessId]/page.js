@@ -8,98 +8,95 @@ export default function ChatPage() {
   const params = useParams();
   const businessId = params.businessId;
 
-  const [activeConv, setActiveConv] = useState(null);
-  const [conversations, setConversations] = useState([]);
+  const [messages, setMessages] = useState([]);
   const [inputValue, setInputValue] = useState('');
   const [isTyping, setIsTyping] = useState(false);
   const [businessInfo, setBusinessInfo] = useState(null);
   const [customerName, setCustomerName] = useState('');
   const [customerPhone, setCustomerPhone] = useState('');
   const [nameStep, setNameStep] = useState('name'); // 'name' | 'phone' | 'done'
+  const [conversationId, setConversationId] = useState(null);
   const messagesEndRef = useRef(null);
   const inputRef = useRef(null);
 
+  // Load business info on mount
   useEffect(() => {
     if (businessId) {
       fetch(`/api/businesses?id=${businessId}`)
         .then(res => res.json())
         .then(data => {
           setBusinessInfo(data);
-          // Show name-collection welcome instead of jumping straight to product chat
-          const initialConv = {
-            id: 'temp_1',
-            customerName: 'You',
-            channel: 'website',
-            status: 'active',
-            urgency: 'low',
-            revenue: 0,
-            messages: [
-              {
-                id: 'm_welcome',
-                role: 'ai',
-                content: `Namaste! 🙏 Welcome to ${data.name || 'StyleCraft India'}!\n\nBefore we start, may I know your name? 😊`,
-                timestamp: new Date().toISOString()
-              }
-            ]
-          };
-          setConversations([initialConv]);
-          setActiveConv(initialConv);
+          setMessages([{
+            id: 'm_welcome',
+            role: 'ai',
+            content: `Namaste! 🙏 Welcome to ${data.name || 'our store'}!\n\nBefore we start, may I know your name? 😊`,
+            timestamp: new Date().toISOString(),
+          }]);
         });
     }
   }, [businessId]);
 
-  const scrollToBottom = () => {
+  // Auto-scroll
+  useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+  }, [messages, isTyping]);
+
+  // Focus input
+  useEffect(() => {
+    if (inputRef.current && nameStep !== 'loading') {
+      setTimeout(() => inputRef.current?.focus(), 300);
+    }
+  }, [messages.length, nameStep]);
+
+  const formatTime = (ts) => {
+    try {
+      return new Date(ts).toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit' });
+    } catch { return ''; }
   };
 
-  useEffect(() => {
-    scrollToBottom();
-  }, [activeConv?.messages]);
+  const getUrgencyStyle = (urgency) => {
+    const map = {
+      high: { color: '#dc2626', bg: '#fef2f2', label: '🔴 High' },
+      medium: { color: '#d97706', bg: '#fffbeb', label: '🟡 Medium' },
+      low: { color: '#059669', bg: '#ecfdf5', label: '🟢 Low' },
+    };
+    return map[urgency] || map.low;
+  };
+
+  const addMsg = (role, content, extra = {}) => {
+    const msg = { id: `m_${Date.now()}_${role}`, role, content, timestamp: new Date().toISOString(), ...extra };
+    setMessages(prev => [...prev, msg]);
+    return msg;
+  };
 
   const handleSend = async () => {
     if (!inputValue.trim() || isTyping) return;
     const text = inputValue.trim();
     setInputValue('');
 
-    // ── Name collection step ──────────────────────────────────────────────────
+    // ── Name collection ──
     if (nameStep === 'name') {
-      const name = text;
-      setCustomerName(name);
-
-      // Update conversation display name
-      const nameMsg = { id: `m_${Date.now()}`, role: 'customer', content: name, timestamp: new Date().toISOString() };
-      const phoneAsk = { id: `m_${Date.now()}_ai`, role: 'ai', content: `Nice to meet you, ${name}! 😊\n\nCould you share your phone number so we can follow up if needed?`, timestamp: new Date().toISOString() };
-      const updated = { ...activeConv, customerName: name, messages: [...activeConv.messages, nameMsg, phoneAsk] };
-      setActiveConv(updated);
-      setConversations(prev => prev.map(c => c.id === updated.id ? updated : c));
+      setCustomerName(text);
+      addMsg('customer', text);
+      setTimeout(() => {
+        addMsg('ai', `Nice to meet you, ${text}! 😊\n\nCould you share your phone number so we can follow up if needed?`);
+      }, 400);
       setNameStep('phone');
       return;
     }
 
     if (nameStep === 'phone') {
-      const phone = text;
-      setCustomerPhone(phone);
+      setCustomerPhone(text);
       setNameStep('done');
-
-      const phoneMsg = { id: `m_${Date.now()}`, role: 'customer', content: phone, timestamp: new Date().toISOString() };
-      const readyMsg = { id: `m_${Date.now()}_ai`, role: 'ai', content: `Perfect! Got it 📝\n\nHi ${customerName}, I\'m the StyleCraft India AI assistant! I can help you with our sarees, kurtas, lehengas, jewelry, and shirts.\n\n👗 What are you looking for today?`, timestamp: new Date().toISOString() };
-      const updated = { ...activeConv, messages: [...activeConv.messages, phoneMsg, readyMsg] };
-      setActiveConv(updated);
-      setConversations(prev => prev.map(c => c.id === updated.id ? updated : c));
+      addMsg('customer', text);
+      setTimeout(() => {
+        addMsg('ai', `Perfect! Got it 📝\n\nHi ${customerName}, I'm your AI shopping assistant! I can help you with our sarees, kurtas, lehengas, jewelry, and shirts.\n\n👗 What are you looking for today?`);
+      }, 400);
       return;
     }
 
-    // ── Normal chat (after name collected) ───────────────────────────────────
-    const userMessage = {
-      id: `m_${Date.now()}`,
-      role: 'customer',
-      content: text,
-      timestamp: new Date().toISOString(),
-    };
-
-    const updatedMessages = [...(activeConv?.messages || []), userMessage];
-    const updatedConv = { ...activeConv, messages: updatedMessages };
-    setActiveConv(updatedConv);
+    // ── Normal chat ──
+    addMsg('customer', text);
     setIsTyping(true);
 
     try {
@@ -111,29 +108,24 @@ export default function ChatPage() {
           message: text,
           customerName: customerName || 'Visitor',
           customerPhone: customerPhone || '',
-          conversationHistory: updatedMessages,
-          conversationId: activeConv.id.startsWith('temp') ? null : activeConv.id
+          conversationHistory: messages.filter(m => m.id !== 'm_welcome').map(m => ({
+            role: m.role,
+            content: m.content,
+          })),
+          conversationId: conversationId,
         }),
       });
 
       const data = await res.json();
+      if (data.conversationId && !conversationId) {
+        setConversationId(data.conversationId);
+      }
 
-      // Once we get a real conversationId back, update the conv id
-      const newConvId = data.conversationId || activeConv.id;
-
-      const aiMessage = {
-        id: `m_${Date.now()}_ai`,
-        role: 'ai',
-        content: data.reply,
-        timestamp: new Date().toISOString(),
+      addMsg('ai', data.reply || 'Sorry, I couldn\'t process that. Please try again!', {
         urgencyDetected: data.urgency,
-      };
-
-      const withAi = { ...updatedConv, id: newConvId, messages: [...updatedMessages, aiMessage], urgency: data.urgency };
-      setActiveConv(withAi);
-      setConversations(prev => prev.map(c => c.id === updatedConv.id ? withAi : c));
+      });
     } catch {
-      console.error('Failed to get AI reply');
+      addMsg('ai', 'Oops! Something went wrong. Please try again. 🙏');
     } finally {
       setIsTyping(false);
     }
@@ -146,163 +138,127 @@ export default function ChatPage() {
     }
   };
 
-  const getUrgencyStyle = (urgency) => {
-    const uMap = {
-      high: { color: '#ef4444', bg: 'rgba(239,68,68,0.12)', label: '🔴 High' },
-      medium: { color: '#f59e0b', bg: 'rgba(245,158,11,0.12)', label: '🟡 Medium' },
-      low: { color: '#22c55e', bg: 'rgba(34,197,94,0.12)', label: '🟢 Low' },
-    };
-    return uMap[urgency] || uMap.low;
+  const handleQuickAction = (text) => {
+    setInputValue(text);
+    setTimeout(() => handleSend(), 100);
   };
 
-  const formatTime = (ts) => {
-    try {
-      return new Date(ts).toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit' });
-    } catch (e) { return ''; }
-  };
+  const storeName = businessInfo?.name || 'Loading...';
+  const storeInitial = storeName.charAt(0).toUpperCase();
 
   return (
     <div className={styles.page}>
-      {/* Sidebar — Conversation List */}
-      <aside className={styles.sidebar}>
-        <div className={styles.sidebarHeader}>
-          <h2>{businessInfo?.name || 'Loading...'}</h2>
-          <span className={styles.convCount}>{conversations.length}</span>
+      {/* ── Brand Header ── */}
+      <div className={styles.brandBar}>
+        <div className={styles.brandLeft}>
+          <div className={styles.brandLogo}>{storeInitial}</div>
+          <div>
+            <div className={styles.brandName}>{storeName}</div>
+            <div className={styles.brandStatus}>
+              <span className={styles.brandStatusDot} />
+              AI Agent Online
+            </div>
+          </div>
         </div>
-        <div className={styles.convList}>
-          {conversations.map((conv) => {
-            const urgStyle = getUrgencyStyle(conv.urgency);
-            const lastMsg = conv.messages[conv.messages.length - 1];
-            return (
-              <button
-                key={conv.id}
-                className={`${styles.convItem} ${activeConv?.id === conv.id ? styles.convActive : ''}`}
-                onClick={() => setActiveConv(conv)}
-              >
-                <div className={styles.convAvatar}>
-                  {conv.customerName.charAt(0)}
-                </div>
-                <div className={styles.convInfo}>
-                  <div className={styles.convTop}>
-                     <span className={styles.convName}>{conv.customerName}</span>
-                     <span className={styles.convTime}>{formatTime(lastMsg?.timestamp)}</span>
-                  </div>
-                  <p className={styles.convPreview}>{lastMsg?.content?.slice(0, 60)}...</p>
-                  <div className={styles.convMeta}>
-                    <span
-                      className={styles.urgBadge}
-                      style={{ color: urgStyle.color, background: urgStyle.bg }}
-                    >
-                      {urgStyle.label}
-                    </span>
-                    <span className={styles.channelBadge}>{conv.channel}</span>
-                  </div>
-                </div>
-              </button>
-            );
-          })}
+        <div className={styles.brandRight}>
+          <span className={styles.brandBadge}>🤖 AI Powered</span>
         </div>
-      </aside>
+      </div>
 
-      {/* Chat Area */}
-      <main className={styles.chatArea}>
-        {activeConv ? (
-          <>
-            {/* Chat Header */}
-            <div className={styles.chatHeader}>
-              <div className={styles.chatHeaderLeft}>
-                <div className={styles.chatAvatar}>
-                  {activeConv.customerName.charAt(0)}
-                </div>
-                <div>
-                  <h3 className={styles.chatName}>{activeConv.customerName}</h3>
-                  <span className={styles.chatChannel}>{activeConv.channel} • {activeConv.status}</span>
-                </div>
+      {/* ── Messages ── */}
+      <div className={styles.messagesArea}>
+        {messages.map((msg, i) => {
+          const isAi = msg.role === 'ai';
+          return (
+            <div
+              key={msg.id}
+              className={`${styles.msgRow} ${isAi ? styles.msgRowAi : styles.msgRowUser}`}
+              style={{ animationDelay: `${i * 0.04}s` }}
+            >
+              <div className={`${styles.msgAvatar} ${isAi ? styles.msgAvatarAi : styles.msgAvatarUser}`}>
+                {isAi ? '🤖' : (customerName?.charAt(0)?.toUpperCase() || '👤')}
               </div>
-              <div className={styles.chatHeaderRight}>
-                <span className={styles.urgBadgeLg} style={{ color: getUrgencyStyle(activeConv.urgency).color, background: getUrgencyStyle(activeConv.urgency).bg, borderColor: getUrgencyStyle(activeConv.urgency).color }}>
-                  {getUrgencyStyle(activeConv.urgency).label} Priority
+              <div className={`${styles.msgBubble} ${isAi ? styles.msgBubbleAi : styles.msgBubbleUser}`}>
+                <span className={`${styles.msgLabel} ${isAi ? styles.msgLabelAi : styles.msgLabelUser}`}>
+                  {isAi ? storeName : (customerName || 'You')}
                 </span>
-                {activeConv.revenue > 0 && (
-                  <span className={styles.revBadge}>💰 ₹{activeConv.revenue.toLocaleString()}</span>
-                )}
+                <p className={styles.msgText}>{msg.content}</p>
+                <div className={styles.msgFooter}>
+                  <span className={styles.msgTime}>{formatTime(msg.timestamp)}</span>
+                  {msg.urgencyDetected && (
+                    <span
+                      className={styles.msgUrgency}
+                      style={{
+                        color: getUrgencyStyle(msg.urgencyDetected).color,
+                        background: getUrgencyStyle(msg.urgencyDetected).bg,
+                      }}
+                    >
+                      {getUrgencyStyle(msg.urgencyDetected).label}
+                    </span>
+                  )}
+                </div>
               </div>
             </div>
+          );
+        })}
 
-            {/* Messages */}
-            <div className={styles.messages}>
-              {activeConv.messages.map((msg, i) => (
-                <div
-                  key={msg.id}
-                  className={`${styles.msg} ${msg.role === 'ai' ? styles.msgAi : styles.msgCustomer}`}
-                  style={{ animationDelay: `${i * 0.05}s` }}
-                >
-                  {msg.role === 'ai' && <span className={styles.aiLabel}>🤖 {businessInfo?.name || 'AI Assistant'}</span>}
-                  {msg.role === 'customer' && <span className={styles.custLabel}>{activeConv.customerName}</span>}
-                  <p className={styles.msgText}>{msg.content}</p>
-                  <div className={styles.msgFooter}>
-                    <span className={styles.msgTime}>{formatTime(msg.timestamp)}</span>
-                    {msg.urgencyDetected && (
-                      <span
-                        className={styles.msgUrgency}
-                        style={{
-                          color: getUrgencyStyle(msg.urgencyDetected).color,
-                          background: getUrgencyStyle(msg.urgencyDetected).bg,
-                        }}
-                      >
-                        {getUrgencyStyle(msg.urgencyDetected).label}
-                      </span>
-                    )}
-                  </div>
-                </div>
-              ))}
-
-              {isTyping && (
-                <div className={`${styles.msg} ${styles.msgAi}`}>
-                  <span className={styles.aiLabel}>🤖 {businessInfo?.name || 'AI Assistant'}</span>
-                  <div className={styles.typingDots}>
-                    <span className={styles.dot} />
-                    <span className={styles.dot} />
-                    <span className={styles.dot} />
-                  </div>
-                </div>
-              )}
-
-              <div ref={messagesEndRef} />
-            </div>
-
-            {/* Input Area */}
-            <div className={styles.inputArea}>
-              <div className={styles.inputWrap}>
-                <textarea
-                  ref={inputRef}
-                  className={styles.input}
-                  placeholder={`Send a message to ${businessInfo?.name || 'the AI'}...`}
-                  value={inputValue}
-                  onChange={(e) => setInputValue(e.target.value)}
-                  onKeyDown={handleKeyDown}
-                  rows={1}
-                />
-                <button
-                  className={styles.sendBtn}
-                  onClick={handleSend}
-                  disabled={!inputValue.trim() || isTyping}
-                >
-                  ⬆
-                </button>
+        {/* Typing indicator */}
+        {isTyping && (
+          <div className={`${styles.msgRow} ${styles.msgRowAi}`}>
+            <div className={`${styles.msgAvatar} ${styles.msgAvatarAi}`}>🤖</div>
+            <div className={`${styles.msgBubble} ${styles.msgBubbleAi}`}>
+              <span className={`${styles.msgLabel} ${styles.msgLabelAi}`}>{storeName}</span>
+              <div className={styles.typingDots}>
+                <span className={styles.dot} />
+                <span className={styles.dot} />
+                <span className={styles.dot} />
               </div>
-              <p className={styles.inputHint}>
-                {businessId ? `You are chatting with the ${businessInfo?.name} AI agent.` : 'Test chat.'}
-              </p>
             </div>
-          </>
-        ) : (
-          <div className={styles.emptyState}>
-             <span className={styles.emptyIcon}>💬</span>
-             <h3>Loading Chat</h3>
           </div>
         )}
-      </main>
+
+        <div ref={messagesEndRef} />
+      </div>
+
+      {/* ── Quick Suggestions (shown after onboarding) ── */}
+      {nameStep === 'done' && messages.length < 6 && (
+        <div className={styles.quickActions}>
+          {['Show me sarees', 'What lehengas do you have?', 'Prices & offers', 'Shipping info'].map(q => (
+            <button key={q} className={styles.quickBtn} onClick={() => { setInputValue(q); }}>
+              {q}
+            </button>
+          ))}
+        </div>
+      )}
+
+      {/* ── Input Area ── */}
+      <div className={styles.inputArea}>
+        <div className={styles.inputWrap}>
+          <textarea
+            ref={inputRef}
+            className={styles.input}
+            placeholder={
+              nameStep === 'name' ? 'Enter your name...' :
+              nameStep === 'phone' ? 'Enter your phone number...' :
+              `Ask ${storeName} anything...`
+            }
+            value={inputValue}
+            onChange={(e) => setInputValue(e.target.value)}
+            onKeyDown={handleKeyDown}
+            rows={1}
+          />
+          <button
+            className={styles.sendBtn}
+            onClick={handleSend}
+            disabled={!inputValue.trim() || isTyping}
+          >
+            ↑
+          </button>
+        </div>
+        <p className={styles.inputHint}>
+          Powered by CustomerIQ AI · Responses may take a few seconds
+        </p>
+      </div>
     </div>
   );
 }
