@@ -15,6 +15,15 @@ function timeAgo(ts) {
   return `${Math.floor(diff / 86400)}d ago`;
 }
 
+function formatSlot(ts) {
+  if (!ts) return '—';
+  try {
+    const d = new Date(ts);
+    return d.toLocaleDateString('en-IN', { day: 'numeric', month: 'short' }) +
+      ' · ' + d.toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit', hour12: true });
+  } catch { return '—'; }
+}
+
 function UrgencyBadge({ urgency }) {
   const map = {
     high:   { cls: styles.urgHigh,   label: '● High' },
@@ -25,37 +34,84 @@ function UrgencyBadge({ urgency }) {
   return <span className={cls}>{label}</span>;
 }
 
+function LeadBadge({ score }) {
+  let label, color, bg;
+  if (score >= 70) { label = '🔥 Hot'; color = '#dc2626'; bg = '#fef2f2'; }
+  else if (score >= 40) { label = '🟡 Warm'; color = '#d97706'; bg = '#fffbeb'; }
+  else if (score >= 20) { label = '🟢 Cool'; color = '#059669'; bg = '#ecfdf5'; }
+  else { label = '❄️ Cold'; color = '#6b7280'; bg = '#f3f4f6'; }
+  return <span style={{ color, background: bg, padding: '2px 8px', borderRadius: 6, fontSize: '0.75rem', fontWeight: 600 }}>{label} {score}</span>;
+}
+
+function StatusBadge({ status }) {
+  const map = {
+    pending:   { bg: '#fffbeb', color: '#d97706', label: '⏳ Pending' },
+    confirmed: { bg: '#ecfdf5', color: '#059669', label: '✅ Confirmed' },
+    cancelled: { bg: '#fef2f2', color: '#dc2626', label: '❌ Cancelled' },
+    completed: { bg: '#eff6ff', color: '#2563eb', label: '✓ Completed' },
+  };
+  const s = map[status] || map.pending;
+  return <span style={{ color: s.color, background: s.bg, padding: '2px 8px', borderRadius: 6, fontSize: '0.72rem', fontWeight: 600 }}>{s.label}</span>;
+}
+
 export default function DashboardPage() {
   const [analytics, setAnalytics] = useState(null);
   const [conversations, setConversations] = useState([]);
+  const [leads, setLeads] = useState([]);
+  const [bookings, setBookings] = useState([]);
+  const [businessId, setBusinessId] = useState(null);
   const [loading, setLoading] = useState(true);
+  const [activeTab, setActiveTab] = useState('overview'); // overview | leads | bookings
 
   useEffect(() => {
-    // Safety: never show loading screen for more than 5 seconds
     const timeout = setTimeout(() => setLoading(false), 5000);
 
-    // Run all fetches in parallel — don't chain
-    Promise.all([
-      fetch(`/api/businesses?email=${DEMO_BUSINESS_EMAIL}`).then(r => r.ok ? r.json() : null).catch(() => null),
-      fetch('/api/analytics').then(r => r.ok ? r.json() : {}).catch(() => ({})),
-      fetch('/api/customers').then(r => r.ok ? r.json() : { customers: [] }).catch(() => ({ customers: [] })),
-    ]).then(([biz, analyticsData, customersData]) => {
-      setAnalytics(analyticsData);
-      setConversations(customersData?.customers || []);
-      // If we got a businessId, re-fetch analytics scoped to it
-      if (biz?.id) {
-        fetch(`/api/analytics?businessId=${biz.id}`)
-          .then(r => r.ok ? r.json() : null)
-          .then(scoped => { if (scoped) setAnalytics(scoped); })
-          .catch(() => {});
-      }
-    }).catch(() => {}).finally(() => {
-      clearTimeout(timeout);
-      setLoading(false);
-    });
+    fetch(`/api/businesses?email=${DEMO_BUSINESS_EMAIL}`)
+      .then(r => r.ok ? r.json() : null)
+      .then(biz => {
+        if (biz?.id) {
+          setBusinessId(biz.id);
+          return Promise.all([
+            fetch(`/api/analytics?businessId=${biz.id}`).then(r => r.ok ? r.json() : {}).catch(() => ({})),
+            fetch(`/api/customers?businessId=${biz.id}`).then(r => r.ok ? r.json() : { customers: [] }).catch(() => ({ customers: [] })),
+            fetch(`/api/lead-scores?businessId=${biz.id}`).then(r => r.ok ? r.json() : { leads: [] }).catch(() => ({ leads: [] })),
+            fetch(`/api/bookings?businessId=${biz.id}`).then(r => r.ok ? r.json() : { bookings: [] }).catch(() => ({ bookings: [] })),
+          ]);
+        }
+        return Promise.all([
+          fetch('/api/analytics').then(r => r.ok ? r.json() : {}).catch(() => ({})),
+          fetch('/api/customers').then(r => r.ok ? r.json() : { customers: [] }).catch(() => ({ customers: [] })),
+          Promise.resolve({ leads: [] }),
+          Promise.resolve({ bookings: [] }),
+        ]);
+      })
+      .then(([analyticsData, customersData, leadsData, bookingsData]) => {
+        setAnalytics(analyticsData);
+        setConversations(customersData?.customers || []);
+        setLeads(leadsData?.leads || []);
+        setBookings(bookingsData?.bookings || []);
+      })
+      .catch(() => {})
+      .finally(() => {
+        clearTimeout(timeout);
+        setLoading(false);
+      });
 
     return () => clearTimeout(timeout);
   }, []);
+
+  const handleBookingAction = async (bookingId, status) => {
+    try {
+      const res = await fetch('/api/bookings', {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ bookingId, status }),
+      });
+      if (res.ok) {
+        setBookings(prev => prev.map(b => b.id === bookingId ? { ...b, status } : b));
+      }
+    } catch {}
+  };
 
   if (loading) {
     return (
@@ -78,29 +134,6 @@ export default function DashboardPage() {
             </div>
           ))}
         </div>
-        <div className={styles.contentGrid}>
-          <div className={styles.panel} style={{ minHeight: 300 }}>
-            <div className={styles.panelHeader}>
-              <div style={{ height: 16, width: 160, borderRadius: 6, background: 'linear-gradient(90deg, var(--border) 25%, var(--bg-hover) 50%, var(--border) 75%)', backgroundSize: '200% 100%', animation: 'shimmer 1.4s infinite' }} />
-            </div>
-            <div style={{ padding: 16 }}>
-              {[1,2,3,4].map(i => (
-                <div key={i} style={{ display: 'flex', gap: 12, alignItems: 'center', padding: '12px 0', borderBottom: '1px solid var(--border)' }}>
-                  <div style={{ width: 32, height: 32, borderRadius: '50%', background: 'linear-gradient(90deg, var(--border) 25%, var(--bg-hover) 50%, var(--border) 75%)', backgroundSize: '200% 100%', animation: 'shimmer 1.4s infinite', flexShrink: 0 }} />
-                  <div style={{ flex: 1 }}>
-                    <div style={{ height: 13, width: '40%', borderRadius: 5, background: 'linear-gradient(90deg, var(--border) 25%, var(--bg-hover) 50%, var(--border) 75%)', backgroundSize: '200% 100%', animation: 'shimmer 1.4s infinite', marginBottom: 7 }} />
-                    <div style={{ height: 11, width: '70%', borderRadius: 5, background: 'linear-gradient(90deg, var(--border) 25%, var(--bg-hover) 50%, var(--border) 75%)', backgroundSize: '200% 100%', animation: 'shimmer 1.4s infinite' }} />
-                  </div>
-                </div>
-              ))}
-            </div>
-          </div>
-          <div className={styles.panel} style={{ minHeight: 300 }}>
-            <div className={styles.panelHeader}>
-              <div style={{ height: 16, width: 130, borderRadius: 6, background: 'linear-gradient(90deg, var(--border) 25%, var(--bg-hover) 50%, var(--border) 75%)', backgroundSize: '200% 100%', animation: 'shimmer 1.4s infinite' }} />
-            </div>
-          </div>
-        </div>
       </div>
     );
   }
@@ -110,6 +143,8 @@ export default function DashboardPage() {
   const highUrgency = analytics?.urgencyBreakdown?.high ?? conversations.filter(c => c.urgency === 'high').length;
   const mediumUrgency = analytics?.urgencyBreakdown?.medium ?? conversations.filter(c => c.urgency === 'medium').length;
   const lowUrgency = analytics?.urgencyBreakdown?.low ?? conversations.filter(c => c.urgency === 'low').length;
+  const hotLeads = leads.filter(l => l.score >= 70).length;
+  const pendingBookings = bookings.filter(b => b.status === 'pending').length;
 
   const recentConvs = [...conversations]
     .sort((a, b) => new Date(b.lastActivity || b.created_at) - new Date(a.lastActivity || a.created_at))
@@ -162,22 +197,20 @@ export default function DashboardPage() {
 
         <div className={styles.statCard}>
           <div className={styles.statHeader}>
-            <span className={styles.statLabel}>Revenue Generated</span>
-            <div className={`${styles.statIcon} ${styles.statIconGreen}`}>₹</div>
+            <span className={styles.statLabel}>Hot Leads</span>
+            <div className={`${styles.statIcon} ${styles.statIconAmber}`}>🔥</div>
           </div>
-          <div className={styles.statValue}>
-            {totalRevenue > 0 ? `₹${(totalRevenue / 1000).toFixed(0)}K` : '₹0'}
-          </div>
-          <div className={`${styles.statChange} ${styles.statUp}`}>↑ From AI chats</div>
+          <div className={styles.statValue} style={{ color: '#dc2626' }}>{hotLeads}</div>
+          <div className={`${styles.statChange} ${styles.statUp}`}>↑ AI-scored</div>
         </div>
 
         <div className={styles.statCard}>
           <div className={styles.statHeader}>
-            <span className={styles.statLabel}>High Urgency</span>
-            <div className={`${styles.statIcon} ${styles.statIconAmber}`}>🔴</div>
+            <span className={styles.statLabel}>Pending Bookings</span>
+            <div className={`${styles.statIcon} ${styles.statIconGreen}`}>📅</div>
           </div>
-          <div className={styles.statValue} style={{ color: '#dc2626' }}>{highUrgency}</div>
-          <div className={`${styles.statChange} ${styles.statNeutral}`}>Need attention</div>
+          <div className={styles.statValue} style={{ color: '#d97706' }}>{pendingBookings}</div>
+          <div className={`${styles.statChange} ${styles.statNeutral}`}>Need confirmation</div>
         </div>
 
         <div className={styles.statCard}>
@@ -190,65 +223,216 @@ export default function DashboardPage() {
         </div>
       </div>
 
-      {/* ── Main Content Grid ──────────────────────────────────── */}
+      {/* ── Tab Switcher ──────────────────────────────────────── */}
+      <div style={{ display: 'flex', gap: 4, padding: '0 16px', marginBottom: 16 }}>
+        {[
+          { key: 'overview', label: '💬 Conversations' },
+          { key: 'leads', label: '🎯 Lead Scoreboard' },
+          { key: 'bookings', label: '📅 Bookings' },
+        ].map(tab => (
+          <button
+            key={tab.key}
+            onClick={() => setActiveTab(tab.key)}
+            style={{
+              padding: '8px 16px', borderRadius: 8, border: '1px solid var(--border)',
+              background: activeTab === tab.key ? 'var(--brand)' : 'var(--bg-card)',
+              color: activeTab === tab.key ? '#fff' : 'var(--text-secondary)',
+              fontWeight: 600, fontSize: '0.82rem', cursor: 'pointer',
+              transition: 'all 0.2s',
+            }}
+          >
+            {tab.label}
+          </button>
+        ))}
+      </div>
+
+      {/* ── Main Content ──────────────────────────────────────── */}
       <div className={styles.contentGrid}>
 
-        {/* Recent Conversations Table */}
-        <div className={styles.panel}>
-          <div className={styles.panelHeader}>
-            <span className={styles.panelTitle}><span>💬</span> Recent Conversations</span>
-            <Link href="/customers" className={styles.panelAction}>View all →</Link>
-          </div>
-          {recentConvs.length === 0 ? (
-            <div className={styles.empty}>
-              <span className={styles.emptyIcon}>💬</span>
-              <p className={styles.emptyText}>No conversations yet. Start chatting to see data here.</p>
+        {/* ── TAB: Conversations ─── */}
+        {activeTab === 'overview' && (
+          <div className={styles.panel}>
+            <div className={styles.panelHeader}>
+              <span className={styles.panelTitle}><span>💬</span> Recent Conversations</span>
+              <Link href="/customers" className={styles.panelAction}>View all →</Link>
             </div>
-          ) : (
-            <table className={styles.convTable}>
-              <thead className={styles.convTableHead}>
-                <tr>
-                  <th>Customer</th>
-                  <th>Last Message</th>
-                  <th>Urgency</th>
-                  <th>Channel</th>
-                  <th>Time</th>
-                </tr>
-              </thead>
-              <tbody>
-                {recentConvs.map(conv => (
-                  <tr key={conv.id} className={styles.convRow}>
-                    <td>
-                      <div className={styles.custCell}>
-                        <div className={styles.custAvatar}>
-                          {(conv.customer_name || conv.customerName || 'V')[0].toUpperCase()}
-                        </div>
-                        <div>
-                          <div className={styles.custName}>{conv.customer_name || conv.customerName || 'Visitor'}</div>
-                          {conv.customer_phone && <div className={styles.custSub}>{conv.customer_phone}</div>}
-                        </div>
-                      </div>
-                    </td>
-                    <td>
-                      <div className={styles.msgPreview}>
-                        {conv.lastMessage || conv.recentMessages?.[0] || '—'}
-                      </div>
-                    </td>
-                    <td><UrgencyBadge urgency={conv.urgency} /></td>
-                    <td>
-                      <span className={styles.channel}>
-                        {conv.channel === 'whatsapp' ? '📱' : '💻'} {conv.channel || 'website'}
-                      </span>
-                    </td>
-                    <td className={styles.timeCell}>{timeAgo(conv.lastActivity || conv.updated_at)}</td>
+            {recentConvs.length === 0 ? (
+              <div className={styles.empty}>
+                <span className={styles.emptyIcon}>💬</span>
+                <p className={styles.emptyText}>No conversations yet. Start chatting to see data here.</p>
+              </div>
+            ) : (
+              <table className={styles.convTable}>
+                <thead className={styles.convTableHead}>
+                  <tr>
+                    <th>Customer</th>
+                    <th>Last Message</th>
+                    <th>Urgency</th>
+                    <th>Channel</th>
+                    <th>Time</th>
                   </tr>
-                ))}
-              </tbody>
-            </table>
-          )}
-        </div>
+                </thead>
+                <tbody>
+                  {recentConvs.map(conv => (
+                    <tr key={conv.id} className={styles.convRow}>
+                      <td>
+                        <div className={styles.custCell}>
+                          <div className={styles.custAvatar}>
+                            {(conv.customer_name || conv.customerName || 'V')[0].toUpperCase()}
+                          </div>
+                          <div>
+                            <div className={styles.custName}>{conv.customer_name || conv.customerName || 'Visitor'}</div>
+                            {conv.customer_phone && <div className={styles.custSub}>{conv.customer_phone}</div>}
+                          </div>
+                        </div>
+                      </td>
+                      <td>
+                        <div className={styles.msgPreview}>
+                          {conv.lastMessage || conv.recentMessages?.[0] || '—'}
+                        </div>
+                      </td>
+                      <td><UrgencyBadge urgency={conv.urgency} /></td>
+                      <td>
+                        <span className={styles.channel}>
+                          {conv.channel === 'whatsapp' ? '📱' : '💻'} {conv.channel || 'website'}
+                        </span>
+                      </td>
+                      <td className={styles.timeCell}>{timeAgo(conv.lastActivity || conv.updated_at)}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            )}
+          </div>
+        )}
 
-        {/* Urgency Breakdown */}
+        {/* ── TAB: Lead Scoreboard ─── */}
+        {activeTab === 'leads' && (
+          <div className={styles.panel}>
+            <div className={styles.panelHeader}>
+              <span className={styles.panelTitle}><span>🎯</span> Lead Scoreboard</span>
+              <span style={{ fontSize: '0.75rem', color: 'var(--text-tertiary)' }}>AI-scored from conversations</span>
+            </div>
+            {leads.length === 0 ? (
+              <div className={styles.empty}>
+                <span className={styles.emptyIcon}>🎯</span>
+                <p className={styles.emptyText}>No lead scores yet. Scores are generated after 5+ messages per conversation.</p>
+              </div>
+            ) : (
+              <div style={{ padding: '0 12px 12px' }}>
+                {leads.map(lead => (
+                  <div key={lead.id} style={{
+                    display: 'flex', alignItems: 'flex-start', gap: 12, padding: '12px 8px',
+                    borderBottom: '1px solid var(--border)',
+                  }}>
+                    <div style={{
+                      width: 36, height: 36, borderRadius: '50%', display: 'flex', alignItems: 'center', justifyContent: 'center',
+                      background: 'var(--bg-hover)', fontWeight: 700, fontSize: '0.85rem', color: 'var(--text-primary)', flexShrink: 0,
+                    }}>
+                      {(lead.conversations?.customer_name || 'V')[0].toUpperCase()}
+                    </div>
+                    <div style={{ flex: 1, minWidth: 0 }}>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 4 }}>
+                        <span style={{ fontWeight: 600, fontSize: '0.85rem', color: 'var(--text-primary)' }}>
+                          {lead.conversations?.customer_name || 'Visitor'}
+                        </span>
+                        <LeadBadge score={lead.score} />
+                      </div>
+                      {lead.needs_summary && (
+                        <p style={{ fontSize: '0.78rem', color: 'var(--text-secondary)', margin: '2px 0', lineHeight: 1.4 }}>
+                          📋 {lead.needs_summary.slice(0, 120)}
+                        </p>
+                      )}
+                      {lead.budget_detected && (
+                        <span style={{ fontSize: '0.72rem', color: 'var(--brand)', fontWeight: 600 }}>
+                          💰 Budget: {lead.budget_detected}
+                        </span>
+                      )}
+                      {lead.next_action && (
+                        <p style={{ fontSize: '0.72rem', color: 'var(--text-tertiary)', margin: '2px 0', fontStyle: 'italic' }}>
+                          → {lead.next_action}
+                        </p>
+                      )}
+                    </div>
+                    <span style={{ fontSize: '0.7rem', color: 'var(--text-tertiary)', flexShrink: 0 }}>
+                      {timeAgo(lead.last_updated_at)}
+                    </span>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* ── TAB: Bookings ─── */}
+        {activeTab === 'bookings' && (
+          <div className={styles.panel}>
+            <div className={styles.panelHeader}>
+              <span className={styles.panelTitle}><span>📅</span> Bookings & Appointments</span>
+              <span style={{ fontSize: '0.75rem', color: 'var(--text-tertiary)' }}>{bookings.length} total</span>
+            </div>
+            {bookings.length === 0 ? (
+              <div className={styles.empty}>
+                <span className={styles.emptyIcon}>📅</span>
+                <p className={styles.emptyText}>No bookings yet. Bookings are auto-created when customers schedule via chat.</p>
+              </div>
+            ) : (
+              <div style={{ padding: '0 12px 12px' }}>
+                {bookings.map(booking => (
+                  <div key={booking.id} style={{
+                    display: 'flex', alignItems: 'center', gap: 12, padding: '12px 8px',
+                    borderBottom: '1px solid var(--border)',
+                  }}>
+                    <div style={{
+                      width: 36, height: 36, borderRadius: '50%', display: 'flex', alignItems: 'center', justifyContent: 'center',
+                      background: 'var(--bg-hover)', fontSize: '1.1rem', flexShrink: 0,
+                    }}>
+                      📅
+                    </div>
+                    <div style={{ flex: 1, minWidth: 0 }}>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 3 }}>
+                        <span style={{ fontWeight: 600, fontSize: '0.85rem', color: 'var(--text-primary)' }}>
+                          {booking.customer_name}
+                        </span>
+                        <StatusBadge status={booking.status} />
+                      </div>
+                      <p style={{ fontSize: '0.78rem', color: 'var(--text-secondary)', margin: 0 }}>
+                        {booking.service_type} · {formatSlot(booking.slot_datetime)}
+                      </p>
+                      {booking.customer_phone && (
+                        <span style={{ fontSize: '0.72rem', color: 'var(--text-tertiary)' }}>📞 {booking.customer_phone}</span>
+                      )}
+                    </div>
+                    {booking.status === 'pending' && (
+                      <div style={{ display: 'flex', gap: 6, flexShrink: 0 }}>
+                        <button
+                          onClick={() => handleBookingAction(booking.id, 'confirmed')}
+                          style={{
+                            padding: '4px 10px', borderRadius: 6, border: 'none', cursor: 'pointer',
+                            background: '#059669', color: '#fff', fontSize: '0.72rem', fontWeight: 600,
+                          }}
+                        >
+                          ✓ Confirm
+                        </button>
+                        <button
+                          onClick={() => handleBookingAction(booking.id, 'cancelled')}
+                          style={{
+                            padding: '4px 10px', borderRadius: 6, border: '1px solid var(--border)', cursor: 'pointer',
+                            background: 'transparent', color: '#dc2626', fontSize: '0.72rem', fontWeight: 600,
+                          }}
+                        >
+                          ✕ Cancel
+                        </button>
+                      </div>
+                    )}
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* Urgency Breakdown — always visible */}
         <div className={styles.panel}>
           <div className={styles.panelHeader}>
             <span className={styles.panelTitle}><span>📊</span> Priority Breakdown</span>
@@ -286,8 +470,10 @@ export default function DashboardPage() {
             {[
               { label: 'Response Rate', value: '99.8%', color: 'var(--success)' },
               { label: 'Avg Response Time', value: '< 2s', color: 'var(--brand)' },
-              { label: 'AI Model', value: 'Qwen 72B', color: 'var(--warning)' },
+              { label: 'Token Savings', value: '~80%', color: 'var(--success)' },
               { label: 'Vector Search', value: 'pgvector', color: 'var(--brand)' },
+              { label: 'Lead Scoring', value: 'Active', color: 'var(--success)' },
+              { label: 'Booking System', value: 'Active', color: 'var(--success)' },
             ].map(item => (
               <div key={item.label} style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '8px', fontSize: '0.82rem' }}>
                 <span style={{ color: 'var(--text-secondary)' }}>{item.label}</span>

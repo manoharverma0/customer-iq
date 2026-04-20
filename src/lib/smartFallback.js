@@ -1,42 +1,59 @@
 import { supabase } from './supabase';
 
 /**
- * Smart Fallback Engine
- * When Gemini AI is unavailable, provide intelligent keyword-based responses
+ * Smart Fallback Engine v2
+ * When AI models are unavailable, provide intelligent keyword-based responses
  * with real product data from Supabase.
+ *
+ * KEY FIXES from v1:
+ * - Products are INCLUDED in the text response (not just returned as separate array)
+ * - Greeting responses have variety (not the same canned message every time)
+ * - "shirts" no longer triggers greeting intent (fixed regex)
+ * - Off-topic queries get a firm, clean redirect
+ * - Tone is genuine and helpful, not pushy salesman
  */
 
 // Keyword → category mapping
 const CATEGORY_KEYWORDS = {
   saree: ['saree', 'sari', 'silk saree', 'banarasi', 'kanchipuram', 'chanderi', 'georgette'],
-  kurta: ['kurta', 'kurtas', 'nehru jacket', 'ethnic wear', 'men', 'menswear'],
+  kurta: ['kurta', 'kurtas', 'nehru jacket', 'ethnic wear'],
   lehenga: ['lehenga', 'lehnga', 'bridal', 'wedding dress', 'choli'],
   jewelry: ['jewelry', 'jewellery', 'necklace', 'earring', 'kundan', 'pearl', 'gold'],
-  shirt: ['shirt', 'shirts', 'casual', 'linen', 'formal wear'],
+  shirt: ['shirt', 'shirts', 'linen', 'formal wear', 'formals'],
 };
 
-// Intent detection patterns
+// Intent detection patterns — FIXED: use word boundaries to prevent false matches
 const INTENT_PATTERNS = {
-  order: ['order', 'buy', 'purchase', 'want to buy', 'add to cart', 'book', 'interested in buying'],
-  pricing: ['price', 'cost', 'how much', 'budget', 'rate', 'kitna', 'kitne'],
-  shipping: ['shipping', 'delivery', 'deliver', 'dispatch', 'track', 'when will', 'how long'],
-  returns: ['return', 'refund', 'exchange', 'cancel', 'replacement', 'money back'],
-  discount: ['discount', 'offer', 'coupon', 'code', 'sale', 'deal', 'first time'],
-  greeting: ['hi', 'hello', 'hey', 'good morning', 'good evening', 'namaste', 'hii'],
-  browse: ['show', 'browse', 'collection', 'catalog', 'what do you have', 'categories', 'products'],
-  complaint: ['bad', 'worst', 'terrible', 'angry', 'frustrated', 'disappointed', 'not happy', 'poor quality'],
-  thanks: ['thank', 'thanks', 'thank you', 'dhanyavaad', 'shukriya'],
-  size: ['size', 'measurement', 'fitting', 'length', 'width'],
+  order: [/\border\b/, /\bbuy\b/, /\bpurchase\b/, /want to buy/, /add to cart/, /\bbook\b/, /interested in buying/],
+  pricing: [/\bprice\b/, /\bcost\b/, /how much/, /\bbudget\b/, /\brate\b/, /\bkitna\b/, /\bkitne\b/],
+  shipping: [/\bshipping\b/, /\bdelivery\b/, /\bdeliver\b/, /\bdispatch\b/, /\btrack\b/, /when will/, /how long/],
+  returns: [/\breturn\b/, /\brefund\b/, /\bexchange\b/, /\bcancel\b/, /\breplacement\b/, /money back/],
+  discount: [/\bdiscount\b/, /\boffer\b/, /\bcoupon\b/, /\bcode\b/, /\bsale\b/, /\bdeal\b/, /first time/],
+  greeting: [/^hi$/i, /^hii+$/i, /^hello$/i, /^hey$/i, /^good morning/i, /^good evening/i, /^namaste$/i, /^hii$/i],
+  browse: [/\bshow\b/, /\bbrowse\b/, /\bcollection\b/, /\bcatalog/, /\bcatalogue/, /what do you have/, /\bcategories\b/, /\bproducts\b/],
+  complaint: [/\bbad\b/, /\bworst\b/, /\bterrible\b/, /\bangry\b/, /\bfrustrated\b/, /\bdisappointed\b/, /not happy/, /poor quality/],
+  thanks: [/\bthank\b/, /\bthanks\b/, /thank you/, /dhanyavaad/, /shukriya/],
+  size: [/\bsize\b/, /\bmeasurement\b/, /\bfitting\b/],
 };
 
-// Detect the user's intent from message
+// Detect intent — uses regex with word boundaries, checks greeting LAST
 function detectIntent(message) {
-  const lower = message.toLowerCase();
-  for (const [intent, patterns] of Object.entries(INTENT_PATTERNS)) {
-    if (patterns.some(p => lower.includes(p))) {
-      return intent;
+  const lower = message.toLowerCase().trim();
+
+  // Check greeting first (exact match only for short messages)
+  if (lower.length <= 12) {
+    for (const pattern of INTENT_PATTERNS.greeting) {
+      if (pattern.test(lower)) return 'greeting';
     }
   }
+
+  // Check all other intents (order matters — more specific first)
+  for (const intent of ['order', 'complaint', 'returns', 'pricing', 'shipping', 'discount', 'size', 'browse', 'thanks']) {
+    for (const pattern of INTENT_PATTERNS[intent]) {
+      if (pattern.test(lower)) return intent;
+    }
+  }
+
   return 'general';
 }
 
@@ -107,21 +124,49 @@ function formatProductCards(products) {
 }
 
 /**
+ * Format products into a text string for WhatsApp/text-only channels.
+ * This MUST be included in the text response so WhatsApp users actually see products.
+ */
+function formatProductsAsText(products) {
+  if (!products || products.length === 0) return '';
+
+  return products.map((p, i) => {
+    const discount = p.original_price ? Math.round((1 - p.price / p.original_price) * 100) : 0;
+    let line = `${i + 1}. ${p.name} — ₹${p.price?.toLocaleString('en-IN')}`;
+    if (discount > 0) line += ` (${discount}% OFF)`;
+    if (p.sizes && p.sizes.length > 0) line += `\n   Sizes: ${p.sizes.join(', ')}`;
+    return line;
+  }).join('\n\n');
+}
+
+// ── Greeting variety — don't repeat the same message ────────────────────────
+const GREETING_VARIANTS = [
+  (name) => `Hi there! 👋 Welcome to ${name}.\n\nWhat are you looking for today?`,
+  (name) => `Hello! 😊 Thanks for reaching out to ${name}.\n\nHow can I help you?`,
+  (name) => `Namaste! 🙏 Welcome to ${name}.\n\nLooking for something specific, or just browsing?`,
+  (name) => `Hey! 👋 Good to see you at ${name}.\n\nWhat can I help you find today?`,
+];
+let _greetingIndex = 0;
+
+/**
  * Main Smart Fallback function
  * Returns { text, products, type, requestStored }
  */
-export async function getSmartFallback(message, conversationId = null) {
+export async function getSmartFallback(message, conversationId = null, businessName = 'StyleCraft India') {
   const intent = detectIntent(message);
   const category = detectCategory(message);
 
   let text = '';
   let products = [];
-  let type = 'text'; // 'text', 'catalog', 'action'
+  let type = 'text';
   let requestStored = false;
 
   switch (intent) {
     case 'greeting': {
-      text = `Namaste! 🙏 Welcome to StyleCraft India! I'm your shopping assistant.\n\nHere's what I can help you with:\n🛍️ Browse our collections (Sarees, Kurtas, Lehengas, Jewelry)\n💰 Check prices & discounts\n📦 Shipping & delivery info\n🔄 Returns & refunds\n\nJust tell me what you're looking for!`;
+      // Rotate through greeting variants so it's not the same every time
+      const variant = GREETING_VARIANTS[_greetingIndex % GREETING_VARIANTS.length];
+      _greetingIndex++;
+      text = variant(businessName);
       break;
     }
 
@@ -129,10 +174,15 @@ export async function getSmartFallback(message, conversationId = null) {
       if (category) {
         const items = await fetchProducts(category, 4);
         products = formatProductCards(items);
-        text = `Here are our top ${category === 'saree' ? 'sarees' : category + 's'} for you! 👇\n\nReply with the product name to order, or ask for more details.`;
+        const productText = formatProductsAsText(items);
+        if (productText) {
+          text = `Here are our ${category === 'saree' ? 'sarees' : category + 's'}:\n\n${productText}\n\nWant more details on any of these?`;
+        } else {
+          text = `We have great ${category === 'saree' ? 'sarees' : category + 's'} in our collection! Let me check what's available for you.`;
+        }
         type = 'catalog';
       } else {
-        text = `We have an amazing collection! 🎉 Which category interests you?\n\n👗 **Sarees** — ₹1,999 to ₹8,999\n👔 **Kurtas** — ₹899 to ₹2,999\n💃 **Lehengas** — ₹7,999 to ₹15,999\n💎 **Jewelry** — ₹1,999 to ₹3,499\n👕 **Shirts** — ₹799 to ₹1,499\n\nJust type the category name to see our bestsellers!`;
+        text = `Here are our categories:\n\n👗 Sarees — ₹2,999 to ₹15,999\n👔 Kurtas — ₹899 to ₹2,999\n💃 Lehengas — ₹5,999 to ₹25,999\n💎 Jewelry — ₹1,499 to ₹8,999\n👕 Shirts — ₹699 to ₹1,999\n\nWhich one interests you?`;
       }
       break;
     }
@@ -141,10 +191,15 @@ export async function getSmartFallback(message, conversationId = null) {
       if (category) {
         const items = await fetchProducts(category, 4);
         products = formatProductCards(items);
-        text = `Here are our ${category} options with prices 💰\n\n🎁 *First-time buyer? Get **15% OFF** on your first order!*`;
+        const productText = formatProductsAsText(items);
+        if (productText) {
+          text = `Here are our ${category} options with prices:\n\n${productText}\n\n🎁 15% OFF for first-time buyers!`;
+        } else {
+          text = `Our ${category === 'saree' ? 'sarees' : category + 's'} range from ₹${category === 'saree' ? '2,999' : '699'} onwards. Want me to check specific items?`;
+        }
         type = 'catalog';
       } else {
-        text = `Here's our price range across categories:\n\n👗 Sarees: ₹1,999 — ₹8,999\n👔 Kurtas: ₹899 — ₹2,999\n💃 Lehengas: ₹7,999 — ₹15,999\n💎 Jewelry: ₹1,999 — ₹3,499\n👕 Shirts: ₹799 — ₹1,499\n\n🎁 **15% OFF for first-time buyers!**\n\nWhich category would you like to explore?`;
+        text = `Our price ranges:\n\n👗 Sarees: ₹2,999 — ₹15,999\n👔 Kurtas: ₹899 — ₹2,999\n💃 Lehengas: ₹5,999 — ₹25,999\n💎 Jewelry: ₹1,499 — ₹8,999\n👕 Shirts: ₹699 — ₹1,999\n\nWhich category are you interested in?`;
       }
       break;
     }
@@ -153,70 +208,79 @@ export async function getSmartFallback(message, conversationId = null) {
       if (category) {
         const items = await fetchProducts(category, 3);
         products = formatProductCards(items);
+        const productText = formatProductsAsText(items);
         await storeRequest(conversationId, 'order_inquiry', category, message);
         requestStored = true;
-        text = `Great choice! 🎉 Here are our bestselling ${category === 'saree' ? 'sarees' : category + 's'}:\n\n📝 To place an order, just reply with the product name and we'll process it right away!\n\n✅ COD available\n🚚 Free shipping above ₹999`;
+        if (productText) {
+          text = `Here are our ${category === 'saree' ? 'sarees' : category + 's'}:\n\n${productText}\n\nWhich one would you like? ✅ COD available | 🚚 Free shipping above ₹999`;
+        } else {
+          text = `I'd love to help you order a ${category}! Let me check what's in stock for you.`;
+        }
         type = 'catalog';
       } else {
         await storeRequest(conversationId, 'order_inquiry', 'general', message);
         requestStored = true;
-        text = `I'd love to help you place an order! 🛒\n\nWhat are you looking for?\n👗 Sarees | 👔 Kurtas | 💃 Lehengas | 💎 Jewelry | 👕 Shirts\n\nJust type the category or describe what you need!`;
+        text = `What would you like to order?\n\n👗 Sarees | 👔 Kurtas | 💃 Lehengas | 💎 Jewelry | 👕 Shirts\n\nJust tell me the category or describe what you need!`;
       }
       break;
     }
 
     case 'shipping': {
-      text = `📦 **Shipping Information:**\n\n🚚 **Standard** (5-7 days) — FREE above ₹999\n⚡ **Express** (2-3 days) — ₹149\n🏃 **Next-Day** (metro cities) — ₹299\n\n🌍 We deliver across India!\n📍 Track your order anytime after dispatch.\n\nNeed help with an existing order? Share your order number!`;
+      text = `📦 Shipping info:\n\n🚚 Standard (5-7 days) — FREE above ₹999\n⚡ Express (2-3 days) — ₹149\n🏃 Next-Day (metro cities) — ₹299\n\nWe deliver across India! Have an order number? I can check the status.`;
       break;
     }
 
     case 'returns': {
       await storeRequest(conversationId, 'return_request', null, message);
       requestStored = true;
-      text = `🔄 **Return & Refund Policy:**\n\n✅ **7-day easy returns** — no questions asked\n💰 **Full refund** processed within 24 hours\n📦 **Free return pickup** from your doorstep\n🔄 **Exchange** available for size/color changes\n\n📝 Your request has been noted! Our team will reach out to you within 2 hours.\n\nNeed immediate help? Share your order number and we'll prioritize it. 🙏`;
+      text = `Our return policy:\n\n✅ 7-day easy returns — no questions asked\n💰 Full refund within 24 hours\n📦 Free return pickup\n🔄 Exchange available for size/color\n\nPlease share your order number and I'll get it sorted. 🙏`;
       type = 'action';
       break;
     }
 
     case 'discount': {
-      text = `🎁 **Current Offers:**\n\n🆕 **15% OFF** for first-time buyers (auto-applied)\n🛍️ **Free shipping** on orders above ₹999\n💝 **Buy 2 Get 10% OFF** on sarees\n🎊 **Festival Special:** Extra ₹200 off on orders above ₹3,000\n\n💡 *Tip: Use code **STYLE15** at checkout for an additional discount!*\n\nWant to explore our bestsellers?`;
+      text = `Current offers:\n\n🆕 15% OFF for first-time buyers\n🛍️ Free shipping on orders above ₹999\n💝 Buy 2 sarees, get 10% OFF\n\nWant to see specific products?`;
       break;
     }
 
     case 'complaint': {
       await storeRequest(conversationId, 'complaint', null, message);
       requestStored = true;
-      text = `I'm really sorry to hear about your experience. 🙏 We take every concern seriously.\n\n✅ Your complaint has been **logged and prioritized** (#${Date.now().toString(36).toUpperCase()}).\n\nHere's what happens next:\n1️⃣ Our senior team will review within **1 hour**\n2️⃣ You'll receive a call/message with a resolution\n3️⃣ We offer **full refund** or **replacement + ₹500 store credit**\n\nCould you share more details about the issue so we can resolve it faster?`;
+      text = `I'm sorry about your experience. 🙏\n\nYour concern has been logged (Ref: #${Date.now().toString(36).toUpperCase()}).\n\nOur team will reach out within 1 hour. If you can share your order number, I can look into it right away.`;
       type = 'action';
       break;
     }
 
     case 'thanks': {
-      text = `You're welcome! 😊 We're always happy to help.\n\nIs there anything else you'd like to explore? Feel free to:\n🛍️ Browse our collections\n📦 Track an order\n🎁 Check out our latest offers\n\nHave a wonderful day! ✨`;
+      text = `You're welcome! 😊 Happy to help. Let me know if you need anything else.`;
       break;
     }
 
     case 'size': {
-      text = `📏 **Size Guide:**\n\n👗 **Sarees:** Standard 5.5m length + 0.8m blouse piece\n👔 **Kurtas:** Available in S, M, L, XL, XXL\n💃 **Lehengas:** Semi-stitched (customizable)\n👕 **Shirts:** S (36") / M (38") / L (40") / XL (42") / XXL (44")\n\n📐 Need custom measurements? We offer **free alteration** on orders above ₹2,000!\n\nWhich product do you need size help with?`;
+      text = `Size guide:\n\n👗 Sarees: Standard 5.5m + blouse piece\n👔 Kurtas: S, M, L, XL, XXL\n💃 Lehengas: Semi-stitched (customizable)\n👕 Shirts: S (36") to XXL (44")\n\nWhich product do you need sizing for?`;
       break;
     }
 
     default: {
-      // Check if there's a category match even with general intent
       if (category) {
         const items = await fetchProducts(category, 4);
         products = formatProductCards(items);
-        text = `Here's what we have in ${category === 'saree' ? 'sarees' : category + 's'} 🛍️\n\nReply with a product name to know more or place an order!`;
+        const productText = formatProductsAsText(items);
+        if (productText) {
+          text = `Here are our ${category === 'saree' ? 'sarees' : category + 's'}:\n\n${productText}\n\nWant details on any of these?`;
+        } else {
+          text = `We have ${category === 'saree' ? 'sarees' : category + 's'} in our collection! Let me find the best options for you.`;
+        }
         type = 'catalog';
       } else {
-        // Try to show bestsellers across categories
         const items = await fetchProducts(null, 4);
         if (items.length > 0) {
           products = formatProductCards(items);
-          text = `Here are some of our bestsellers! 🌟\n\nOr tell me what you're looking for:\n👗 Sarees | 👔 Kurtas | 💃 Lehengas | 💎 Jewelry | 👕 Shirts`;
+          const productText = formatProductsAsText(items);
+          text = `Here are some popular items:\n\n${productText}\n\nAnything catch your eye?`;
           type = 'catalog';
         } else {
-          text = `Thanks for reaching out! 😊 I'm here to help you find the perfect outfit.\n\nExplore our categories:\n👗 Sarees | 👔 Kurtas | 💃 Lehengas | 💎 Jewelry | 👕 Shirts\n\nOr tell me what occasion you're shopping for!`;
+          text = `I can help you with sarees, kurtas, lehengas, jewelry, or shirts. What are you looking for?`;
         }
       }
       break;

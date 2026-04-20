@@ -1,15 +1,19 @@
 import { NextResponse } from 'next/server';
-import { generateAIReply } from '@/lib/gemini';
+import { generateAIReply, generateSummary } from '@/lib/gemini';
 import { generateEmbedding } from '@/lib/embeddings';
 import { detectUrgency, detectBuyerIntent, getUrgencyConfig } from '@/lib/urgencyDetector';
 import { getSmartFallback } from '@/lib/smartFallback';
+import { getSmartContext, buildContextString, maybeGenerateSummary } from '@/lib/conversationSummary';
+import { detectBookingIntent, getAvailableSlots, createBooking, formatSlotsForAI, extractDateFromMessage } from '@/lib/bookingEngine';
+import { getBusinessPricing, matchPricingToQuery, formatPricingForPrompt } from '@/lib/pricingEngine';
+import { scoreConversation } from '@/lib/leadScoring';
 import {
   createConversation,
   addMessage,
   logAnalyticsEvent,
   supabase,
   vectorSearchProducts,
-  getConversationHistory,
+  vectorSearchKnowledge,
   getDemoBusiness,
 } from '@/lib/supabase';
 
@@ -31,9 +35,9 @@ export async function POST(request) {
     const urgency = detectUrgency(message);
     const urgencyConfig = getUrgencyConfig(urgency);
     const buyerIntent = detectBuyerIntent(message);
+    const bookingIntent = detectBookingIntent(message);
 
-    // ── STEP 1: Load business from DB (not hardcoded) ──────────────────────
-    // businessId from URL param takes priority; fallback to demo business
+    // ── STEP 1: Load business from DB ──────────────────────────────────────
     let business = null;
     if (businessId && supabase) {
       const { data } = await supabase
@@ -43,7 +47,6 @@ export async function POST(request) {
         .single();
       business = data;
     }
-    // Always fall back to demo business if not found
     if (!business) {
       business = await getDemoBusiness();
     }
@@ -88,6 +91,7 @@ export async function POST(request) {
       addMessage(convId, 'customer', message, urgency, {
         detectedIntents: detectIntents(message),
         buyerIntent,
+        bookingIntent: bookingIntent.isBooking,
       }).catch(() => {});
 
       // Persist the MAX urgency to the overall conversation
@@ -100,7 +104,6 @@ export async function POST(request) {
           ? new Date(convState.human_last_replied_at).getTime()
           : 0;
         if (Date.now() - lastReply > 5 * 60 * 1000) {
-          // Auto-release
           await supabase.from('conversations')
             .update({ ai_paused: false, taken_over_by: null })
             .eq('id', convId);
@@ -115,39 +118,87 @@ export async function POST(request) {
       }
     }
 
-    // ── STEP 4: Vector Search — find semantically relevant products ────────
+    // ── STEP 4: Parallel Data Fetch ────────────────────────────────────────
+    // Fetch embedding, context summary, pricing, and booking slots in parallel
     let retrievedProducts = [];
+    let retrievedKnowledge = [];
+    let pricingRows = [];
+    let pricingContext = '';
+    let bookingContext = '';
+    let conversationContext = '';
+
     if (effectiveBusinessId) {
       try {
-        // Run embedding generation and DB history load in parallel
-        const [queryEmbedding, dbHistory] = await Promise.all([
+        const parallelFetches = [
           generateEmbedding(message),
-          convId ? getConversationHistory(convId, 20) : Promise.resolve([]),
-        ]);
+          convId ? getSmartContext(convId) : Promise.resolve({ summary: '', recentMessages: [] }),
+          getBusinessPricing(effectiveBusinessId),
+        ];
 
-        // Vector search with the embedding
-        if (queryEmbedding) {
-          retrievedProducts = await vectorSearchProducts(queryEmbedding, effectiveBusinessId, 3);
+        if (bookingIntent.isBooking) {
+          parallelFetches.push(getAvailableSlots(effectiveBusinessId, extractDateFromMessage(message)));
         }
 
-        // ── STEP 5: Generate AI reply with full context ──────────────────
-        // Use DB history (true stateful) — fall back to frontend-provided history
-        const history = dbHistory.length > 0 ? dbHistory : (frontendHistory || []);
+        const parallelResults = await Promise.all(parallelFetches);
+        const queryEmbedding = parallelResults[0];
+        const smartCtx = parallelResults[1];
+        const allPricing = parallelResults[2];
+        const availableSlots = parallelResults[3] || null;
 
+        // Build conversation context from rolling summary (not raw history)
+        conversationContext = buildContextString(smartCtx);
+
+        // Skip vector search for greetings — don't fetch random products for "hi"
+        const isGreeting = /^(hi|hii+|hello|hey|namaste|ok|thanks|thank you)\s*[!.?]*$/i.test(message.trim());
+
+        // Vector search: products + knowledge in parallel (skip for greetings)
+        if (queryEmbedding && !isGreeting) {
+          const [products, knowledge] = await Promise.all([
+            vectorSearchProducts(queryEmbedding, effectiveBusinessId, 3),
+            vectorSearchKnowledge(queryEmbedding, effectiveBusinessId, 3),
+          ]);
+          retrievedProducts = products;
+          retrievedKnowledge = knowledge;
+        }
+
+        // Pricing context — match relevant pricing to customer's query
+        pricingRows = allPricing || [];
+        const matchedPricing = matchPricingToQuery(pricingRows, message);
+        if (matchedPricing.length > 0) {
+          pricingContext = formatPricingForPrompt(matchedPricing);
+        } else if (pricingRows.length > 0 && /price|cost|how much|kitna|budget|rate/i.test(message.toLowerCase())) {
+          // If asking about price but no specific match, show all pricing
+          pricingContext = formatPricingForPrompt(pricingRows);
+        }
+
+        // Booking context — show available slots if booking intent detected
+        if (bookingIntent.isBooking) {
+          const slots = availableSlots || await getAvailableSlots(effectiveBusinessId, extractDateFromMessage(message));
+          bookingContext = formatSlotsForAI(slots);
+        }
+
+        // ── STEP 5: Generate AI reply with full dynamic context ──────────
         let reply;
         let responseType = 'text';
         let aiProvider = 'hf';
         let requestStored = false;
-        let products = retrievedProducts; // Show matched products in UI
+        let products = retrievedProducts;
+        let bookingCreated = null;
 
         try {
           reply = await generateAIReply(
             message,
-            history,
+            [],  // No raw history — we use conversationContext now
             business?.system_prompt || null,
             retrievedProducts,
             business?.name || 'StyleCraft India',
-            buyerIntent   // 🔑 sales mode: strong_buy | soft_buy | browse | support
+            buyerIntent,
+            // New production params:
+            retrievedKnowledge,
+            pricingContext,
+            bookingContext,
+            conversationContext,
+            pricingRows
           );
         } catch (aiError) {
           console.warn('AI unavailable, using smart fallback:', aiError.message?.slice(0, 80));
@@ -159,13 +210,43 @@ export async function POST(request) {
           aiProvider = 'smart-fallback';
         }
 
+        // ── STEP 6: Agentic Action — Auto-create booking if confirmed ────
+        if (bookingIntent.isBooking && convId && buyerIntent === 'strong_buy') {
+          const targetDate = extractDateFromMessage(message);
+          if (targetDate) {
+            bookingCreated = await createBooking(
+              effectiveBusinessId,
+              convId,
+              customerName || 'Customer',
+              customerPhone || null,
+              'General Inquiry', // Will be refined by AI context later
+              targetDate.toISOString(),
+              `Auto-booked via AI chat. Message: ${message.slice(0, 100)}`
+            );
+            if (bookingCreated) {
+              responseType = 'booking';
+            }
+          }
+        }
+
         // Save AI reply to DB (non-blocking)
         if (convId) {
           addMessage(convId, 'ai', reply, null, {
             urgency, aiProvider,
             vectorHits: retrievedProducts.length,
+            knowledgeHits: retrievedKnowledge.length,
             topProduct: retrievedProducts[0]?.name || null,
+            bookingCreated: !!bookingCreated,
+            usedSummary: !!smartCtx.summary,
           }).catch(() => {});
+        }
+
+        // ── STEP 7: Trigger rolling summary + lead scoring (non-blocking) ─
+        if (convId) {
+          // Summary: compresses every 5 messages
+          maybeGenerateSummary(convId, generateSummary).catch(() => {});
+          // Lead scoring: runs after summary generation
+          scoreConversation(convId).catch(() => {});
         }
 
         logAnalyticsEvent('chat_message', {
@@ -173,7 +254,10 @@ export async function POST(request) {
           messageLength: message.length, conversationId: convId,
           productsShown: products.length, requestStored,
           vectorHits: retrievedProducts.length,
-          usedDbHistory: dbHistory.length > 0,
+          knowledgeHits: retrievedKnowledge.length,
+          usedSummary: !!smartCtx.summary,
+          bookingCreated: !!bookingCreated,
+          bookingIntentDetected: bookingIntent.isBooking,
         }).catch(() => {});
 
         return NextResponse.json({
@@ -184,18 +268,25 @@ export async function POST(request) {
           products,
           responseType,
           requestStored,
+          bookingCreated: bookingCreated ? {
+            id: bookingCreated.id,
+            slotDatetime: bookingCreated.slot_datetime,
+            status: bookingCreated.status,
+          } : null,
           metadata: {
             processedAt: new Date().toISOString(),
             aiProvider,
             messageLength: message.length,
             vectorHits: retrievedProducts.length,
-            historyLoaded: dbHistory.length,
+            knowledgeHits: retrievedKnowledge.length,
+            usedSummary: !!smartCtx.summary,
+            summaryTokens: conversationContext.length,
             businessFromDb: !!business,
           },
         });
 
       } catch (innerErr) {
-        console.error('Vector/history pipeline error:', innerErr);
+        console.error('Production pipeline error:', innerErr);
         // Fall through to basic fallback below
       }
     }
@@ -243,5 +334,6 @@ function detectIntents(message) {
   if (lower.includes('delivery') || lower.includes('ship') || lower.includes('track')) intents.push('delivery');
   if (lower.includes('size') || lower.includes('fit')) intents.push('size');
   if (lower.includes('discount') || lower.includes('offer') || lower.includes('sale')) intents.push('discount');
+  if (lower.includes('book') || lower.includes('appointment') || lower.includes('slot')) intents.push('booking');
   return intents.length > 0 ? intents : ['general'];
 }

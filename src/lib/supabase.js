@@ -178,12 +178,38 @@ export async function vectorSearchProducts(queryEmbedding, businessId, limit = 3
       query_embedding: queryEmbedding,
       business_id_filter: businessId,
       match_count: limit,
-      similarity_threshold: 0.25,
+      similarity_threshold: 0.4,
     });
     if (error) { console.warn('Vector search error:', error.message); return []; }
     return data || [];
   } catch (err) {
     console.warn('Vector search failed:', err.message);
+    return [];
+  }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// NEW: Vector Search for Knowledge/FAQ Chunks (RAG)
+// ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * Semantic knowledge/FAQ search using pgvector cosine similarity.
+ * Requires the match_knowledge() SQL function from supabase-production-upgrade.sql.
+ * Returns top-k knowledge chunks most relevant to the query.
+ */
+export async function vectorSearchKnowledge(queryEmbedding, businessId, limit = 3) {
+  if (!supabase || !queryEmbedding || !businessId) return [];
+  try {
+    const { data, error } = await supabase.rpc('match_knowledge', {
+      query_embedding: queryEmbedding,
+      business_id_filter: businessId,
+      match_count: limit,
+      similarity_threshold: 0.25,
+    });
+    if (error) { console.warn('Knowledge search error:', error.message); return []; }
+    return data || [];
+  } catch (err) {
+    console.warn('Knowledge search failed:', err.message);
     return [];
   }
 }
