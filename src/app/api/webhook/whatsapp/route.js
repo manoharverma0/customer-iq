@@ -169,6 +169,12 @@ export async function POST(request) {
     let aiProvider = 'groq';
     let retrievedProducts = [];
 
+    // ── Intent flags for catalog/image gating (used in steps 6b and 8) ────
+    const isBrowseRequest = /\b(show|see|browse|catalog|collection|products|menu|what do you have|dikhao|dekho)\b/i.test(message);
+    const isShortReply = message.trim().length <= 10;
+    const isOrderFlow = buyerIntent === 'strong_buy' || /\b(confirm|order|book|proceed|yes|ok|ha|haan|theek)\b/i.test(message.trim().toLowerCase());
+    const isGreeting = /^(hi|hii+|hello|hey|namaste|ok|thanks|thank you)\s*[!.?]*$/i.test(message.trim());
+
     if (businessId) {
       try {
         const parallelFetches = [
@@ -192,10 +198,8 @@ export async function POST(request) {
         console.log(`💬 Context for AI: ${smartCtx.recentMessages.length} recent msgs | summary: ${smartCtx.summary ? 'yes' : 'no'} | ctx length: ${conversationContext.length}`);
 
         // Skip vector search for greetings
-        const isGreeting = /^(hi|hii+|hello|hey|namaste|ok|thanks|thank you)\s*[!.?]*$/i.test(message.trim());
 
         // Vector search: products + knowledge (skip for greetings)
-        let retrievedProducts = [];
         let retrievedKnowledge = [];
         if (queryEmbedding && !isGreeting) {
           const [products, knowledge] = await Promise.all([
@@ -248,9 +252,10 @@ export async function POST(request) {
           pricingRows
         );
 
-        // ── 6b. Append WhatsApp catalog when products are retrieved ────────
-        if (retrievedProducts.length > 0 && !isGreeting) {
-          // Detect category from products
+        // ── 6b. Append WhatsApp catalog ONLY on explicit browse requests ────
+        // Never append during: order flow, confirmations, greetings, short replies
+
+        if (isBrowseRequest && !isShortReply && !isOrderFlow && retrievedProducts.length > 0) {
           const topCategory = retrievedProducts[0]?.category || null;
           const catalogText = formatCatalogForWhatsApp(retrievedProducts, topCategory);
           if (catalogText && (reply.length + catalogText.length) < 1400) {
@@ -295,15 +300,16 @@ export async function POST(request) {
       conversationId,
     }).catch(err => console.warn('Analytics failed:', err.message));
 
-    // ── 8. Send product image (async, after TwiML reply) ─────────────────
-    // If products were found and this looks like a product query,
-    // send the top product image as a follow-up media message.
-    if (retrievedProducts.length > 0 && buyerIntent !== 'greeting') {
+    // ── 8. Send product image ONLY on explicit browse, not during order flow ─
+    const shouldSendImage = retrievedProducts.length > 0
+      && !isOrderFlow && !isShortReply && !isGreeting
+      && (isBrowseRequest || buyerIntent === 'browse');
+
+    if (shouldSendImage) {
       const topProduct = retrievedProducts[0];
       const imageUrl = getProductImageUrl(topProduct);
       if (imageUrl) {
         const productDetail = formatProductDetailForWhatsApp(topProduct);
-        // Fire-and-forget: send product image as a separate message
         sendWhatsAppMedia(fromNum, productDetail, imageUrl)
           .catch(err => console.warn('Product image send failed:', err.message));
       }
