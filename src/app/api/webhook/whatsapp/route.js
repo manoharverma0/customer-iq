@@ -8,6 +8,14 @@ import { detectBookingIntent, getAvailableSlots, formatSlotsForAI, extractDateFr
 import { getBusinessPricing, matchPricingToQuery, formatPricingForPrompt } from '@/lib/pricingEngine';
 import { generateEmbedding } from '@/lib/embeddings';
 import { scoreConversation } from '@/lib/leadScoring';
+import { sendWhatsAppMedia } from '@/lib/ownerNotifier';
+import {
+  detectCatalogIntent,
+  formatCatalogForWhatsApp,
+  formatProductDetailForWhatsApp,
+  getProductImageUrl,
+  getCategoryOverview,
+} from '@/lib/whatsappCatalog';
 import {
   supabase,
   getBusinessProfile,
@@ -158,7 +166,8 @@ export async function POST(request) {
 
     // ── 6. Parallel data fetch: summary, embedding, pricing ────────────────
     let reply = '';
-    let aiProvider = 'hf';
+    let aiProvider = 'groq';
+    let retrievedProducts = [];
 
     if (businessId) {
       try {
@@ -223,10 +232,11 @@ export async function POST(request) {
           bookingContext = formatSlotsForAI(availableSlots);
         }
 
-        // Generate AI reply with full dynamic context
+        // Generate AI reply with full dynamic context + conversation history
+        const recentHistory = smartCtx.recentMessages?.slice(-6) || [];
         reply = await generateAIReply(
           message,
-          [],
+          recentHistory,
           business.system_prompt || null,
           retrievedProducts,
           business.name || 'StyleCraft India',
@@ -237,6 +247,16 @@ export async function POST(request) {
           conversationContext,
           pricingRows
         );
+
+        // ── 6b. Append WhatsApp catalog when products are retrieved ────────
+        if (retrievedProducts.length > 0 && !isGreeting) {
+          // Detect category from products
+          const topCategory = retrievedProducts[0]?.category || null;
+          const catalogText = formatCatalogForWhatsApp(retrievedProducts, topCategory);
+          if (catalogText && (reply.length + catalogText.length) < 1400) {
+            reply += '\n\n' + catalogText;
+          }
+        }
 
         console.log(`✅ AI replied (${reply.length} chars) | intent: ${buyerIntent}`);
 
@@ -262,10 +282,10 @@ export async function POST(request) {
     if (conversationId) {
       await addMessage(conversationId, 'ai', reply, null, {
         channel: 'whatsapp', aiProvider, urgency,
-      }).catch(() => {});
-      // Trigger rolling summary + lead scoring (non-blocking, OK to fire-and-forget)
-      maybeGenerateSummary(conversationId, generateSummary).catch(() => {});
-      scoreConversation(conversationId).catch(() => {});
+      }).catch(err => console.warn('Save AI reply failed:', err.message));
+      // Trigger rolling summary + lead scoring (non-blocking)
+      maybeGenerateSummary(conversationId, generateSummary).catch(err => console.warn('Summary gen failed:', err.message));
+      scoreConversation(conversationId).catch(err => console.warn('Lead scoring failed:', err.message));
     }
     logAnalyticsEvent('whatsapp_message', {
       businessId, urgency, aiProvider,
@@ -273,7 +293,21 @@ export async function POST(request) {
       messageLength: message.length,
       replyLength: reply.length,
       conversationId,
-    }).catch(() => {});
+    }).catch(err => console.warn('Analytics failed:', err.message));
+
+    // ── 8. Send product image (async, after TwiML reply) ─────────────────
+    // If products were found and this looks like a product query,
+    // send the top product image as a follow-up media message.
+    if (retrievedProducts.length > 0 && buyerIntent !== 'greeting') {
+      const topProduct = retrievedProducts[0];
+      const imageUrl = getProductImageUrl(topProduct);
+      if (imageUrl) {
+        const productDetail = formatProductDetailForWhatsApp(topProduct);
+        // Fire-and-forget: send product image as a separate message
+        sendWhatsAppMedia(fromNum, productDetail, imageUrl)
+          .catch(err => console.warn('Product image send failed:', err.message));
+      }
+    }
 
     console.log(`✅ TwiML reply sent to ${fromNum}: "${reply.slice(0, 60)}..."`);
     return twimlResponse(reply);

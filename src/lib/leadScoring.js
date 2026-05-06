@@ -7,6 +7,7 @@
 // ─────────────────────────────────────────────────────────────────────────────
 
 import { supabase } from './supabase';
+import { notifyOwnerHotLead } from './ownerNotifier';
 
 // ── Scoring weights ──────────────────────────────────────────────────────────
 const SCORING_RULES = {
@@ -151,6 +152,27 @@ export async function scoreConversation(conversationId) {
       .single();
 
     console.log(`🎯 Lead score: ${score}/100 for conv ${conversationId.slice(0, 8)}`);
+
+    // ── TRIGGER: Notify business owner for hot leads (first-time only) ────
+    if (score >= 70 && upserted) {
+      // Get business ID from conversation
+      const { data: convForBiz } = await supabase
+        .from('conversations')
+        .select('business_id')
+        .eq('id', conversationId)
+        .single();
+
+      if (convForBiz?.business_id) {
+        notifyOwnerHotLead(convForBiz.business_id, conversationId, {
+          score,
+          budget_detected: budgetDetected,
+          needs_summary: needsSummary,
+          urgency_detected: conv.urgency,
+          next_action: nextAction,
+        }).catch(err => console.warn('Non-critical: owner notification failed:', err.message));
+      }
+    }
+
     return upserted;
   } catch (err) {
     console.warn('Lead scoring failed:', err.message);
