@@ -215,6 +215,84 @@ export async function vectorSearchKnowledge(queryEmbedding, businessId, limit = 
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+// FALLBACK: Keyword-based product search (when embeddings are unavailable)
+// ─────────────────────────────────────────────────────────────────────────────
+
+const CATEGORY_MAP = {
+  saree: ['saree', 'sari', 'silk', 'banarasi', 'kanchipuram', 'chanderi', 'georgette'],
+  kurta: ['kurta', 'kurtas', 'nehru', 'ethnic'],
+  lehenga: ['lehenga', 'lehnga', 'bridal', 'wedding', 'choli'],
+  jewelry: ['jewelry', 'jewellery', 'necklace', 'earring', 'kundan', 'pearl', 'gold', 'bangle'],
+  shirt: ['shirt', 'shirts', 'linen', 'formal', 'casual'],
+};
+
+/**
+ * Direct keyword-based product search — NO embeddings needed.
+ * Used as fallback when HuggingFace embedding API is down.
+ * Detects category from message, queries products directly from DB.
+ * For vague queries like "collection"/"show me" → returns a mix of all categories.
+ */
+export async function keywordSearchProducts(message, businessId, limit = 4) {
+  if (!supabase) return [];
+
+  const lower = (message || '').toLowerCase();
+
+  // Detect specific category
+  let matchedCategory = null;
+  for (const [category, keywords] of Object.entries(CATEGORY_MAP)) {
+    if (keywords.some(k => lower.includes(k))) {
+      matchedCategory = category;
+      break;
+    }
+  }
+
+  try {
+    // Build query — try with business_id first, fall back without it
+    let query = supabase
+      .from('products')
+      .select('id, name, category, price, original_price, description');
+
+    // Try to filter by business — will silently fail if column doesn't exist
+    if (businessId) {
+      query = query.eq('business_id', businessId);
+    }
+
+    if (matchedCategory) {
+      query = query.ilike('category', `%${matchedCategory}%`);
+    }
+
+    query = query.order('price', { ascending: matchedCategory ? true : false }).limit(limit);
+
+    let { data, error } = await query;
+
+    // If business_id column doesn't exist, retry without it
+    if (error && error.message?.includes('business_id')) {
+      console.log('🔄 products table has no business_id — querying without it');
+      let retryQuery = supabase
+        .from('products')
+        .select('id, name, category, price, original_price, description');
+
+      if (matchedCategory) {
+        retryQuery = retryQuery.ilike('category', `%${matchedCategory}%`);
+      }
+
+      retryQuery = retryQuery.order('price', { ascending: matchedCategory ? true : false }).limit(limit);
+
+      const retry = await retryQuery;
+      data = retry.data;
+      error = retry.error;
+    }
+
+    if (error) { console.warn('Keyword product search error:', error.message); return []; }
+    console.log(`🔍 Keyword search: "${matchedCategory || 'broad'}" → ${(data || []).length} products`);
+    return data || [];
+  } catch (err) {
+    console.warn('Keyword search failed:', err.message);
+    return [];
+  }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // NEW: Demo Business from DB (cached, not hardcoded)
 // ─────────────────────────────────────────────────────────────────────────────
 

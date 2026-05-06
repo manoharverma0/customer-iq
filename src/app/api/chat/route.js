@@ -14,6 +14,7 @@ import {
   supabase,
   vectorSearchProducts,
   vectorSearchKnowledge,
+  keywordSearchProducts,
   getDemoBusiness,
 } from '@/lib/supabase';
 
@@ -92,7 +93,7 @@ export async function POST(request) {
         detectedIntents: detectIntents(message),
         buyerIntent,
         bookingIntent: bookingIntent.isBooking,
-      }).catch(() => {});
+      }).catch(err => console.warn('Non-critical: save customer message failed:', err.message));
 
       // Persist the MAX urgency to the overall conversation
       await supabase.from('conversations')
@@ -161,6 +162,14 @@ export async function POST(request) {
           retrievedKnowledge = knowledge;
         }
 
+        // FALLBACK: If embeddings failed (HF API down), use keyword-based DB search
+        if (retrievedProducts.length === 0 && !isGreeting) {
+          const recentText = smartCtx.recentMessages.map(m => m.content).join(' ');
+          const searchText = message + ' ' + recentText;
+          console.log('⚡ Embedding failed — using keyword product fallback');
+          retrievedProducts = await keywordSearchProducts(searchText, effectiveBusinessId, 4);
+        }
+
         // Pricing context — match relevant pricing to customer's query
         pricingRows = allPricing || [];
         const matchedPricing = matchPricingToQuery(pricingRows, message);
@@ -180,15 +189,18 @@ export async function POST(request) {
         // ── STEP 5: Generate AI reply with full dynamic context ──────────
         let reply;
         let responseType = 'text';
-        let aiProvider = 'hf';
+        let aiProvider = 'groq';
         let requestStored = false;
         let products = retrievedProducts;
         let bookingCreated = null;
 
+        // Pass recent messages so the LLM has actual conversation memory
+        const recentHistory = smartCtx.recentMessages?.slice(-6) || [];
+
         try {
           reply = await generateAIReply(
             message,
-            [],  // No raw history — we use conversationContext now
+            recentHistory,  // Actual recent messages for multi-turn context
             business?.system_prompt || null,
             retrievedProducts,
             business?.name || 'StyleCraft India',
@@ -238,15 +250,15 @@ export async function POST(request) {
             topProduct: retrievedProducts[0]?.name || null,
             bookingCreated: !!bookingCreated,
             usedSummary: !!smartCtx.summary,
-          }).catch(() => {});
+          }).catch(err => console.warn('Non-critical: save AI reply failed:', err.message));
         }
 
         // ── STEP 7: Trigger rolling summary + lead scoring (non-blocking) ─
         if (convId) {
           // Summary: compresses every 5 messages
-          maybeGenerateSummary(convId, generateSummary).catch(() => {});
+          maybeGenerateSummary(convId, generateSummary).catch(err => console.warn('Non-critical: summary generation failed:', err.message));
           // Lead scoring: runs after summary generation
-          scoreConversation(convId).catch(() => {});
+          scoreConversation(convId).catch(err => console.warn('Non-critical: lead scoring failed:', err.message));
         }
 
         logAnalyticsEvent('chat_message', {
@@ -258,7 +270,7 @@ export async function POST(request) {
           usedSummary: !!smartCtx.summary,
           bookingCreated: !!bookingCreated,
           bookingIntentDetected: bookingIntent.isBooking,
-        }).catch(() => {});
+        }).catch(err => console.warn('Non-critical: analytics event failed:', err.message));
 
         return NextResponse.json({
           reply,
@@ -293,7 +305,7 @@ export async function POST(request) {
 
     // ── FALLBACK: No business in DB — basic AI call ───────────────────────
     const history = frontendHistory || [];
-    let reply, products = [], responseType = 'text', aiProvider = 'hf', requestStored = false;
+    let reply, products = [], responseType = 'text', aiProvider = 'groq', requestStored = false;
 
     try {
       reply = await generateAIReply(message, history, null, [], 'StyleCraft India');
@@ -307,7 +319,7 @@ export async function POST(request) {
     }
 
     if (convId) {
-      addMessage(convId, 'ai', reply, null, { urgency, aiProvider }).catch(() => {});
+      addMessage(convId, 'ai', reply, null, { urgency, aiProvider }).catch(err => console.warn('Non-critical: save fallback reply failed:', err.message));
     }
 
     return NextResponse.json({

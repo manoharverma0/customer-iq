@@ -16,6 +16,7 @@ import {
   logAnalyticsEvent,
   vectorSearchProducts,
   vectorSearchKnowledge,
+  keywordSearchProducts,
 } from '@/lib/supabase';
 
 // ─── Config ──────────────────────────────────────────────────────────────────
@@ -129,29 +130,29 @@ export async function POST(request) {
 
     // ── 3. Smart urgency (never downgrade) ─────────────────────────────────
     if (conversationId && supabase) {
-      const weight = { low: 1, medium: 2, high: 3 };
-      const currentWeight = weight[convData?.urgency] || 0;
-      const newWeight = weight[urgency] || 1;
-      const finalUrgency = newWeight > currentWeight ? urgency : convData?.urgency || urgency;
+      try {
+        const weight = { low: 1, medium: 2, high: 3 };
+        const currentWeight = weight[convData?.urgency] || 0;
+        const newWeight = weight[urgency] || 1;
+        const finalUrgency = newWeight > currentWeight ? urgency : convData?.urgency || urgency;
 
-      await supabase
-        .from('conversations')
-        .update({ urgency: finalUrgency, updated_at: new Date().toISOString() })
-        .eq('id', conversationId)
-        .catch(() => {});
+        await supabase
+          .from('conversations')
+          .update({ urgency: finalUrgency, updated_at: new Date().toISOString() })
+          .eq('id', conversationId);
+      } catch { /* non-critical */ }
     }
 
-    // ── 4. Save incoming message ───────────────────────────────────────────
-    const saveIncoming = conversationId
-      ? addMessage(conversationId, 'customer', message, urgency, {
-          channel: 'whatsapp', from: fromNum, buyerIntent,
-          bookingIntent: bookingIntent.isBooking,
-        }).catch(() => {})
-      : Promise.resolve();
+    // ── 4. Save incoming message (MUST complete before context fetch) ─────
+    if (conversationId) {
+      await addMessage(conversationId, 'customer', message, urgency, {
+        channel: 'whatsapp', from: fromNum, buyerIntent,
+        bookingIntent: bookingIntent.isBooking,
+      }).catch(() => {});
+    }
 
     // ── 5. Human takeover check ────────────────────────────────────────────
     if (convData?.ai_paused) {
-      await saveIncoming;
       return twimlResponse('');
     }
 
@@ -179,6 +180,7 @@ export async function POST(request) {
 
         // Build conversation context from rolling summary
         const conversationContext = buildContextString(smartCtx);
+        console.log(`💬 Context for AI: ${smartCtx.recentMessages.length} recent msgs | summary: ${smartCtx.summary ? 'yes' : 'no'} | ctx length: ${conversationContext.length}`);
 
         // Skip vector search for greetings
         const isGreeting = /^(hi|hii+|hello|hey|namaste|ok|thanks|thank you)\s*[!.?]*$/i.test(message.trim());
@@ -193,6 +195,16 @@ export async function POST(request) {
           ]);
           retrievedProducts = products;
           retrievedKnowledge = knowledge;
+        }
+
+        // FALLBACK: If embeddings failed (HF API down), use keyword-based DB search
+        if (retrievedProducts.length === 0 && !isGreeting) {
+          // Combine current message + recent conversation context for better keyword matching
+          // e.g. user says "order classic" but earlier discussed "kurta" → match kurta
+          const recentText = smartCtx.recentMessages.map(m => m.content).join(' ');
+          const searchText = message + ' ' + recentText;
+          console.log('⚡ Embedding failed — using keyword product fallback');
+          retrievedProducts = await keywordSearchProducts(searchText, businessId, 4);
         }
 
         // Pricing context
@@ -246,26 +258,22 @@ export async function POST(request) {
       reply = reply.slice(0, 1577) + '...';
     }
 
-    // ── 7. Save AI reply + trigger summary/scoring (non-blocking) ──────────
-    saveIncoming.then(async () => {
-      try {
-        if (conversationId) {
-          await addMessage(conversationId, 'ai', reply, null, {
-            channel: 'whatsapp', aiProvider, urgency,
-          });
-          // Trigger rolling summary + lead scoring
-          maybeGenerateSummary(conversationId, generateSummary).catch(() => {});
-          scoreConversation(conversationId).catch(() => {});
-        }
-        await logAnalyticsEvent('whatsapp_message', {
-          businessId, urgency, aiProvider,
-          fromNumber: fromNum,
-          messageLength: message.length,
-          replyLength: reply.length,
-          conversationId,
-        });
-      } catch { /* non-critical */ }
-    });
+    // ── 7. Save AI reply (MUST complete before response to preserve context) ─
+    if (conversationId) {
+      await addMessage(conversationId, 'ai', reply, null, {
+        channel: 'whatsapp', aiProvider, urgency,
+      }).catch(() => {});
+      // Trigger rolling summary + lead scoring (non-blocking, OK to fire-and-forget)
+      maybeGenerateSummary(conversationId, generateSummary).catch(() => {});
+      scoreConversation(conversationId).catch(() => {});
+    }
+    logAnalyticsEvent('whatsapp_message', {
+      businessId, urgency, aiProvider,
+      fromNumber: fromNum,
+      messageLength: message.length,
+      replyLength: reply.length,
+      conversationId,
+    }).catch(() => {});
 
     console.log(`✅ TwiML reply sent to ${fromNum}: "${reply.slice(0, 60)}..."`);
     return twimlResponse(reply);

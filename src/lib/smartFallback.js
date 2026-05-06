@@ -212,7 +212,7 @@ export async function getSmartFallback(message, conversationId = null, businessN
         await storeRequest(conversationId, 'order_inquiry', category, message);
         requestStored = true;
         if (productText) {
-          text = `Here are our ${category === 'saree' ? 'sarees' : category + 's'}:\n\n${productText}\n\nWhich one would you like? ✅ COD available | 🚚 Free shipping above ₹999`;
+          text = `Great choice! 🎉 Here are our ${category === 'saree' ? 'sarees' : category + 's'}:\n\n${productText}\n\nTo place your order, please share:\n1️⃣ Which item you'd like\n2️⃣ Size (S/M/L/XL/XXL)\n3️⃣ Your delivery pincode\n\n✅ COD available | 🚚 Free shipping above ₹999`;
         } else {
           text = `I'd love to help you order a ${category}! Let me check what's in stock for you.`;
         }
@@ -220,7 +220,7 @@ export async function getSmartFallback(message, conversationId = null, businessN
       } else {
         await storeRequest(conversationId, 'order_inquiry', 'general', message);
         requestStored = true;
-        text = `What would you like to order?\n\n👗 Sarees | 👔 Kurtas | 💃 Lehengas | 💎 Jewelry | 👕 Shirts\n\nJust tell me the category or describe what you need!`;
+        text = `To place your order, please share:\n\n1️⃣ Which product you'd like\n2️⃣ Size (S/M/L/XL/XXL)\n3️⃣ Your delivery pincode\n\n✅ COD available | 🚚 Free shipping above ₹999 | 💰 UPI/Card accepted\n\nOr tell me which category: 👗 Sarees | 👔 Kurtas | 💃 Lehengas | 💎 Jewelry | 👕 Shirts`;
       }
       break;
     }

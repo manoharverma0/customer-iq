@@ -7,7 +7,7 @@
 
 import { supabase } from './supabase';
 
-const SUMMARY_THRESHOLD = 5; // Generate summary every N new messages
+const SUMMARY_THRESHOLD = 4; // Generate summary every N new messages
 
 /**
  * Get the rolling summary + last 2 raw messages for a conversation.
@@ -29,7 +29,7 @@ export async function getSmartContext(conversationId) {
       .select('role, content, created_at')
       .eq('conversation_id', conversationId)
       .order('created_at', { ascending: false })
-      .limit(2),
+      .limit(6),
   ]);
 
   const summary = summaryResult.data?.summary_text || '';
